@@ -5,21 +5,108 @@ description: Deploy Infinite Canvas with Docker Compose
 
 # Docker Deployment
 
-## Use the published image
+The internal platform is deployed as four Docker Compose services: Web, API,
+PostgreSQL, and MinIO. The provided Compose file only publishes the Web port
+`3000`; the browser reaches the API through the Web container's `/api` reverse
+proxy.
+
+<Callout type="warn">
+The default configuration uses HTTP and is intended for a trusted LAN only. Do
+not expose this deployment directly to the public Internet. Use a properly
+configured HTTPS reverse proxy before expanding its network boundary.
+</Callout>
+
+## Prepare the environment
+
+Clone the repository, copy the environment template, and replace every
+`change-me` value before starting the services:
 
 ```bash
 git clone git@github.com:basketikun/infinite-canvas.git
 cd infinite-canvas
-docker compose up -d
+cp .env.example .env
 ```
 
-Open `http://localhost:3000`.
+The required deployment secrets include:
+
+- `POSTGRES_PASSWORD` and the matching password in `DATABASE_URL`;
+- `MINIO_ROOT_PASSWORD` and `MINIO_SECRET_KEY`;
+- `CHANNEL_ENCRYPTION_KEY`, with at least 32 characters, used to encrypt
+  channel API keys stored in PostgreSQL;
+- `BOOTSTRAP_ADMIN_PASSWORD`, used when the initial administrator is created.
+
+The standard Compose setup serves the API through the Web container's same-origin `/api`
+reverse proxy, so do not put a changing LAN IPv4 address into the configuration. LAN devices
+can use the host's current address at `http://<LAN-IP>:3000`. Only set `CORS_ORIGIN` when the
+API is accessed directly from another origin; use a stable Web origin, with multiple origins
+separated by commas. Keep `COOKIE_SECURE=false` only for trusted-LAN HTTP access. Do not
+commit the completed `.env` file.
+
+## Start the internal platform
+
+Build and start all four services from the current source:
+
+```bash
+docker compose up -d --build
+```
+
+| Service | Purpose | Published port |
+| --- | --- | --- |
+| `app` | Vite Web application and Nginx reverse proxy | `3000` |
+| `api` | Authentication, storage, generation queue, and administration API | None |
+| `postgres` | Accounts, canvases, assets, tasks, messages, and configuration | None |
+| `minio` | Uploaded and generated image objects | None |
+
+Open `http://localhost:3000` on the host, or
+`http://<LAN-IP>:3000` from another device on the same LAN. If the host receives its address
+from DHCP, use the new IPv4 address after it changes; data remains in the PostgreSQL and MinIO
+volumes. Because browsers treat the new IP as a new site, existing login cookies do not migrate
+and users must sign in again. For a stable address, reserve the host's DHCP lease or configure a
+LAN DNS/mDNS hostname and use that hostname instead. If a host firewall
+is enabled, allow inbound TCP `3000` from the trusted LAN only. Do not publish
+API `3001`, PostgreSQL `5432`, MinIO `9000`, or the MinIO console `9001`.
 
 ## Build locally
+
+`docker-compose.yml` already builds the Web and API images from the checked-out
+source. `docker-compose.local.yml` can be used when explicitly named local
+image tags are useful:
 
 ```bash
 docker compose -f docker-compose.local.yml up -d --build
 ```
+
+## Import into 1Panel
+
+1. Upload or clone the repository onto the server and create `.env` beside
+   `docker-compose.yml` as described above.
+2. In 1Panel, create a Compose stack by importing the repository's
+   `docker-compose.yml`, with the repository directory as the build context.
+3. Confirm that only `3000:3000` is published, then build and start the stack.
+4. Restrict port `3000` to the trusted LAN in the server and upstream firewall.
+
+The exact 1Panel labels can vary by release. This repository supplies the
+Compose definition but does not claim production validation for every 1Panel
+or network configuration.
+
+## Data and backups
+
+PostgreSQL and MinIO are both authoritative persistent data stores. The
+Compose stack stores them in the `postgres_data` and `minio_data` volumes;
+browser storage is not a substitute for server backup.
+
+Create one daily backup job that captures PostgreSQL and MinIO at the same
+recovery point, using a short maintenance window or coordinated snapshot/dump
+procedure. Keep the latest seven daily recovery points. A database-only or
+object-storage-only backup may leave references and media out of sync after a
+restore.
+
+Back up `CHANNEL_ENCRYPTION_KEY` separately in an access-controlled secret
+store or offline backup. Restoring the database without the exact same key
+prevents existing encrypted channel API keys from being decrypted. The
+provided Compose files create persistent volumes, but do not schedule or
+verify backups automatically; test the restore procedure in your own
+environment.
 
 ## Documentation image
 
@@ -37,8 +124,6 @@ cd docs
 docker compose -f docker-compose.local.yml up -d --build
 ```
 
-The main application container only runs Next.js. Canvases, My Assets, generation history, and API keys are stored in the browser by default, while prompt repositories are fetched directly by the frontend. No persistent data volume is required for this data.
-
 ## Optional analytics
 
 No analytics are enabled by default. A deployment can enable GA4, Baidu Analytics, or both at runtime:
@@ -51,9 +136,6 @@ No analytics are enabled by default. A deployment can enable GA4, Baidu Analytic
 ```yaml
 services:
   app:
-    image: ghcr.io/basketikun/infinite-canvas:latest
-    ports:
-      - "3000:3000"
     environment:
       ANALYTICS_GA4_ID: G-XXXXXXXXXX
       ANALYTICS_BAIDU_ID: e8263761cc5c32f5f7a855b8203b965a

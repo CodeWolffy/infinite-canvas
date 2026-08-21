@@ -32,10 +32,11 @@
 ## Project Progress
 
 - [Changelog](/docs/progress/changelog)
+- [Internal Creative Platform Plan](/docs/progress/internal-platform-plan)
 - [Pending Tests](/docs/progress/pending-test)
 - [TODO](/docs/progress/todo)
 
 ## Notes
 
-- Canvas projects and My Assets are primarily stored in the browser. WebDAV can be configured for cross-device synchronization.
-- The AI API key is stored in the browser, which sends requests directly to OpenAI-compatible endpoints.
+- The internal-platform implementation is pending verification; canvases, assets, image history, and text results now use PostgreSQL and MinIO as authoritative storage.
+- Administrators configure encrypted server-side channel API keys, and regular users send image and text requests through the platform.

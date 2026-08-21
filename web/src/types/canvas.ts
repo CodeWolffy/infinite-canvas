@@ -35,6 +35,8 @@ export type CanvasNodeImage = {
     naturalHeight: number;
     bytes: number;
     mimeType: string;
+    generationBatchId?: string;
+    generationTaskId?: string;
 };
 
 export type CanvasNodeMetadata = {
@@ -48,6 +50,8 @@ export type CanvasNodeMetadata = {
     generationType?: CanvasImageGenerationType;
     model?: string;
     reasoningEffort?: "auto" | "low" | "medium" | "high" | "xhigh";
+    conversationId?: string;
+    textRequestId?: string;
     size?: string;
     quality?: string;
     background?: string;

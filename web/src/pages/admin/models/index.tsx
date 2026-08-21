@@ -1,0 +1,86 @@
+import { useEffect, useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { App, Button, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag } from "antd";
+import type { TableColumnsType } from "antd";
+import { Cable, Pencil, Plus, Trash2 } from "lucide-react";
+
+import { createAdminModel, deleteAdminModel, deleteModelChannelBinding, getAdminChannels, getAdminModels, getModelChannelBindings, saveModelChannelBinding, updateAdminModel, updateAdminModelStatus, type AdminModel, type BindingInput, type ModelInput } from "@/services/api/admin-platform";
+
+type ModelValues = ModelInput & { pricePerImage?: string };
+type BindingValues = BindingInput & { channelId: string };
+
+export default function AdminModelsPage() {
+    const { message, modal } = App.useApp();
+    const queryClient = useQueryClient();
+    const [editing, setEditing] = useState<AdminModel | null | undefined>(undefined);
+    const [bindingModel, setBindingModel] = useState<AdminModel | null>(null);
+    const [bindingOpen, setBindingOpen] = useState(false);
+    const [editingBindingChannelId, setEditingBindingChannelId] = useState<string | null>(null);
+    const [modelForm] = Form.useForm<ModelValues>();
+    const [bindingForm] = Form.useForm<BindingValues>();
+    const modelsQuery = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels });
+    const channelsQuery = useQuery({ queryKey: ["admin", "channels"], queryFn: getAdminChannels });
+    const bindingsQuery = useQuery({ queryKey: ["admin", "model-bindings", bindingModel?.id], queryFn: () => getModelChannelBindings(bindingModel!.id), enabled: Boolean(bindingModel) });
+    const refreshModels = () => queryClient.invalidateQueries({ queryKey: ["admin", "models"] });
+    const refreshBindings = () => queryClient.invalidateQueries({ queryKey: ["admin", "model-bindings", bindingModel?.id] });
+    const saveModel = useMutation({ mutationFn: (values: ModelValues) => editing ? updateAdminModel(editing.id, normalizeModel(values, editing.config)) : createAdminModel(normalizeModel(values, {}) as ModelInput), onSuccess: () => { void refreshModels(); setEditing(undefined); modelForm.resetFields(); message.success(editing ? "模型已更新" : "模型已创建"); }, onError: notifyError(message.error) });
+    const statusMutation = useMutation({ mutationFn: ({ id, status }: { id: string; status: AdminModel["status"] }) => updateAdminModelStatus(id, status), onSuccess: () => void refreshModels(), onError: notifyError(message.error) });
+    const deleteMutation = useMutation({ mutationFn: deleteAdminModel, onSuccess: () => { void refreshModels(); message.success("模型已删除"); }, onError: notifyError(message.error) });
+    const bindingMutation = useMutation({ mutationFn: ({ channelId, ...values }: BindingValues) => saveModelChannelBinding(bindingModel!.id, channelId, values), onSuccess: () => { void refreshBindings(); setBindingOpen(false); bindingForm.resetFields(); message.success("渠道绑定已保存"); }, onError: notifyError(message.error) });
+    const unbindMutation = useMutation({ mutationFn: (channelId: string) => deleteModelChannelBinding(bindingModel!.id, channelId), onSuccess: () => { void refreshBindings(); message.success("渠道绑定已移除"); }, onError: notifyError(message.error) });
+
+    useEffect(() => {
+        if (editing === undefined) return;
+        modelForm.resetFields();
+        modelForm.setFieldsValue(editing ? { name: editing.name, displayName: editing.displayName, capability: editing.capability, status: editing.status, pricePerImage: editing.pricePerImage || undefined, description: editing.description } : { capability: "image", status: "draft" });
+    }, [editing, modelForm]);
+
+    const openBinding = (model: AdminModel) => { setBindingModel(model); setEditingBindingChannelId(null); bindingForm.resetFields(); };
+    const columns: TableColumnsType<AdminModel> = [
+        { title: "公开名称", key: "name", width: 220, render: (_, model) => <div><div className="font-medium text-stone-950 dark:text-stone-100">{model.displayName}</div><div className="text-xs text-stone-500">{model.name}</div></div> },
+        { title: "能力", dataIndex: "capability", width: 90, render: (value) => value === "image" ? "图片" : "文本" },
+        { title: "价格", dataIndex: "pricePerImage", width: 120, render: (value: string | null, model) => model.capability === "image" ? `¥${Number(value || 0).toFixed(2)} / 张` : "—" },
+        { title: "状态", dataIndex: "status", width: 130, render: (status: AdminModel["status"], model) => <Select size="small" value={status} onChange={(value) => statusMutation.mutate({ id: model.id, status: value })} options={[{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "disabled", label: "已停用" }]} /> },
+        { title: "说明", dataIndex: "description", ellipsis: true, render: (value: string | null) => <span className="text-stone-500">{value || "—"}</span> },
+        { title: "操作", key: "actions", fixed: "right", width: 240, render: (_, model) => <Space><Button type="text" size="small" icon={<Cable className="size-3.5" />} onClick={() => openBinding(model)}>渠道配置</Button><Button type="text" size="small" icon={<Pencil className="size-3.5" />} onClick={() => setEditing(model)}>编辑</Button><Button type="text" danger size="small" icon={<Trash2 className="size-3.5" />} onClick={() => modal.confirm({ title: `删除 ${model.displayName}？`, content: "有关联记录时服务端会拒绝删除。", okText: "删除", cancelText: "取消", okButtonProps: { danger: true }, onOk: () => deleteMutation.mutateAsync(model.id) })} /></Space> },
+    ];
+
+    return (
+        <AdminPage title="模型管理" eyebrow="Model catalog" description="发布普通用户可见的真实模型，并配置价格与上游渠道。" action={<Button type="primary" icon={<Plus className="size-4" />} onClick={() => setEditing(null)}>创建模型</Button>}>
+            <Table<AdminModel> rowKey="id" columns={columns} dataSource={modelsQuery.data || []} loading={modelsQuery.isLoading} pagination={false} scroll={{ x: 980 }} />
+            <Modal title={editing ? "编辑模型" : "创建模型"} open={editing !== undefined} footer={null} onCancel={() => setEditing(undefined)} destroyOnHidden>
+                <Form<ModelValues> form={modelForm} layout="vertical" requiredMark={false} className="pt-3" onFinish={(values) => saveModel.mutate(values)}>
+                    <Form.Item name="displayName" label="显示名称" rules={[{ required: true, message: "请输入显示名称" }]}><Input placeholder="例如 GPT Image 2" /></Form.Item>
+                    <Form.Item name="name" label="模型标识" rules={[{ required: true, message: "请输入模型标识" }]}><Input placeholder="例如 gpt-image-2" /></Form.Item>
+                    <div className="grid grid-cols-2 gap-4"><Form.Item name="capability" label="能力" rules={[{ required: true }]}><Select options={[{ value: "image", label: "图片" }, { value: "text", label: "文本" }]} /></Form.Item><Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "disabled", label: "已停用" }]} /></Form.Item></div>
+                    <Form.Item noStyle shouldUpdate={(previous, current) => previous.capability !== current.capability}>{({ getFieldValue }) => getFieldValue("capability") === "image" ? <Form.Item name="pricePerImage" label="价格（元 / 张）"><InputNumber min={0} precision={6} className="w-full" /></Form.Item> : null}</Form.Item>
+                    <Form.Item name="description" label="说明"><Input.TextArea rows={3} /></Form.Item>
+                    <Space className="flex justify-end"><Button onClick={() => setEditing(undefined)}>取消</Button><Button type="primary" htmlType="submit" loading={saveModel.isPending}>保存</Button></Space>
+                </Form>
+            </Modal>
+            <Drawer title={`${bindingModel?.displayName || "模型"} · 渠道配置`} width={680} open={Boolean(bindingModel)} onClose={() => setBindingModel(null)}>
+                <Button className="mb-4" type="primary" icon={<Plus className="size-4" />} onClick={() => { setEditingBindingChannelId(null); bindingForm.resetFields(); bindingForm.setFieldsValue({ priority: 0, weight: 100, enabled: true }); setBindingOpen(true); }}>添加渠道</Button>
+                <Table rowKey="channelId" size="small" loading={bindingsQuery.isLoading} dataSource={bindingsQuery.data || []} pagination={false} columns={[{ title: "渠道", dataIndex: "channelName" }, { title: "上游模型", dataIndex: "upstreamModel" }, { title: "优先级", dataIndex: "priority", width: 80 }, { title: "权重", dataIndex: "weight", width: 70 }, { title: "状态", dataIndex: "enabled", width: 70, render: (value) => value ? <Tag color="green">启用</Tag> : <Tag>停用</Tag> }, { title: "操作", width: 110, render: (_, binding) => <Space><Button type="text" size="small" onClick={() => { setEditingBindingChannelId(binding.channelId); bindingForm.setFieldsValue({ channelId: binding.channelId, upstreamModel: binding.upstreamModel, priority: binding.priority, weight: binding.weight, enabled: binding.enabled }); setBindingOpen(true); }}>编辑</Button><Button type="text" danger size="small" onClick={() => unbindMutation.mutate(binding.channelId)}>移除</Button></Space> }]} />
+            </Drawer>
+            <Modal title="配置模型渠道" open={bindingOpen} footer={null} onCancel={() => setBindingOpen(false)} destroyOnHidden>
+                <Form<BindingValues> form={bindingForm} layout="vertical" requiredMark={false} className="pt-3" onFinish={(values) => bindingMutation.mutate(values)}>
+                    <Form.Item name="channelId" label="渠道" rules={[{ required: true, message: "请选择渠道" }]}><Select disabled={Boolean(editingBindingChannelId)} options={(channelsQuery.data || []).map((channel) => ({ value: channel.id, label: `${channel.name} · ${channel.protocol}` }))} /></Form.Item>
+                    <Form.Item name="upstreamModel" label="上游模型名称" rules={[{ required: true, message: "请输入上游模型名称" }]}><Input /></Form.Item>
+                    <div className="grid grid-cols-2 gap-4"><Form.Item name="priority" label="优先级" rules={[{ required: true }]}><InputNumber className="w-full" precision={0} /></Form.Item><Form.Item name="weight" label="同级权重" rules={[{ required: true }]}><InputNumber className="w-full" min={1} precision={0} /></Form.Item></div>
+                    <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
+                    <Space className="flex justify-end"><Button onClick={() => setBindingOpen(false)}>取消</Button><Button type="primary" htmlType="submit" loading={bindingMutation.isPending}>保存配置</Button></Space>
+                </Form>
+            </Modal>
+        </AdminPage>
+    );
+}
+
+function normalizeModel(values: ModelValues, config: Record<string, unknown>) {
+    return { ...values, pricePerImage: values.capability === "image" && values.pricePerImage !== undefined ? String(values.pricePerImage) : null, description: values.description || null, config };
+}
+
+function AdminPage({ title, eyebrow, description, action, children }: { title: string; eyebrow: string; description: string; action: ReactNode; children: ReactNode }) {
+    return <div className="w-full px-6 py-6 lg:px-8 lg:py-8"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">{eyebrow}</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">{title}</h1><p className="mt-1 text-sm text-stone-500">{description}</p></div>{action}</div><div className="mt-6 overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800">{children}</div></div>;
+}
+
+function notifyError(notify: (content: string) => void) { return (error: Error) => notify(error.message || "操作失败"); }

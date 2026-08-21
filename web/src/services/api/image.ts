@@ -1,7 +1,10 @@
 import axios from "axios";
 
 import i18n from "@/i18n";
-import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { createGenerationBatch, getGenerationBatch, getPublicModels, uploadGenerationMedia, type GenerationBatchDetail } from "@/services/api/generation";
+import { mediaId } from "@/services/api/media";
+import { createTextConversation, createTextRequest } from "@/services/api/text";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -94,7 +97,15 @@ type GeminiPayload = {
     promptFeedback?: { blockReason?: string };
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = {
+    signal?: AbortSignal;
+    canvasProjectId?: string;
+    conversationId?: string;
+    onConversationCreated?: (conversationId: string) => void;
+    onTextRequestPrepared?: (requestId: string, conversationId: string) => void;
+    onTextRequestSkipped?: () => void;
+    onBatchCreated?: (detail: GenerationBatchDetail) => void;
+};
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -715,164 +726,143 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
-    const script = resolveModelScript(config, config.model || config.imageModel);
-    if (script) {
-        const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
-        const background = normalizeBackground(config.background);
-        try {
-            const result = await runModelPlugin({
-                capability: "image",
-                script,
-                config: requestConfig,
-                prompt: withSystemPrompt(requestConfig, prompt),
-                images: [],
-                params: { size: requestSize, quality, count: n, ...(background ? { background } : {}) },
-                signal: options?.signal,
-            });
-            return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
-        } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
-        }
-    }
-    if (requestConfig.apiFormat === "gemini") {
-        try {
-            return await requestGeminiImages(requestConfig, prompt, [], n, options);
-        } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
-        }
-    }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
-    const background = normalizeBackground(config.background);
-    try {
-        const response = await axios.post<ImageApiResponse>(
-            aiApiUrl(requestConfig, "/images/generations"),
-            {
-                model: requestConfig.model,
-                prompt: withSystemPrompt(requestConfig, prompt),
-                n,
-                ...(quality ? { quality } : {}),
-                ...(requestSize ? { size: requestSize } : {}),
-                ...(background ? { background } : {}),
-                response_format: "b64_json",
-                output_format: IMAGE_OUTPUT_FORMAT,
-            },
-            {
-                headers: aiHeaders(requestConfig, "application/json"),
-                signal: options?.signal,
-            },
-        );
-        const images = parseImagePayload(response.data);
-        return images;
-    } catch (error) {
-        throw new Error(readAxiosError(error, apiText("requestFailed")));
-    }
+    return requestPlatformImages(config, prompt, [], n, options);
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions) {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
-    const script = resolveModelScript(config, config.model || config.imageModel);
-    if (script) {
-        const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
-        const background = normalizeBackground(config.background);
-        const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
-        try {
-            const result = await runModelPlugin({
-                capability: "image",
-                script,
-                config: requestConfig,
-                prompt: withSystemPrompt(requestConfig, requestPrompt),
-                images: refs,
-                params: { size: requestSize, quality, count: n, ...(background ? { background } : {}) },
-                signal: options?.signal,
-            });
-            return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
-        } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
-        }
-    }
-    if (requestConfig.apiFormat === "gemini") {
-        if (mask) throw new Error(apiText("geminiMaskUnsupported"));
-        try {
-            return await requestGeminiImages(requestConfig, requestPrompt, references, n, options);
-        } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
-        }
-    }
-
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
-    const background = normalizeBackground(config.background);
-    const formData = new FormData();
-    formData.set("model", requestConfig.model);
-    formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));
-    formData.set("n", String(n));
-    formData.set("response_format", "b64_json");
-    formData.set("output_format", IMAGE_OUTPUT_FORMAT);
-    if (quality) {
-        formData.set("quality", quality);
-    }
-    if (requestSize) {
-        formData.set("size", requestSize);
-    }
-    if (background) {
-        formData.set("background", background);
-    }
-    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    files.forEach((file) => formData.append("image", file));
-    if (mask) formData.set("mask", dataUrlToFile(mask));
-
-    try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal });
-        const images = parseImagePayload(response.data);
-        return images;
-    } catch (error) {
-        throw new Error(readAxiosError(error, apiText("requestFailed")));
-    }
+    return requestPlatformImages(config, requestPrompt, mask ? [...references, mask] : references, n, options);
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: AiTextMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.textModel);
-    const script = resolveModelScript(config, config.model || config.textModel);
-    if (script) {
-        try {
-            const answer = await runModelPlugin<string>({
-                capability: "text",
-                script,
-                config: requestConfig,
-                messages: withSystemMessage(requestConfig, messages),
-                signal: options?.signal,
-                onDelta,
-            });
-            const text = String(answer ?? "").trim() || apiText("noContent");
-            if (text === apiText("noContent")) onDelta(text);
-            return text;
-        } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
-        }
+    const throwIfAborted = () => {
+        if (!options?.signal?.aborted) return;
+        options.onTextRequestSkipped?.();
+        throw new DOMException("Aborted", "AbortError");
+    };
+    throwIfAborted();
+    let conversationId = options?.conversationId;
+    if (!conversationId) {
+        conversationId = (await createTextConversation({ canvasProjectId: options?.canvasProjectId, title: textMessageContent(messages.at(-1)?.content || "新对话").slice(0, 80) || "新对话" })).id;
+        options?.onConversationCreated?.(conversationId);
     }
-    try {
-        if (requestConfig.apiFormat === "gemini") {
-            const answer = (await requestGeminiStreamingResponse(requestConfig, toGeminiBody(requestConfig, messages), onDelta, options)).content || apiText("noContent");
-            if (answer === apiText("noContent")) onDelta(answer);
-            return answer;
+    throwIfAborted();
+    const requestMessages = options?.conversationId ? messages.slice(-1) : messages;
+    const content = requestMessages.map((message) => `${message.role}: ${textMessageContent(message.content)}`).join("\n\n");
+    const [attachmentMediaIds, modelId] = await Promise.all([
+        Promise.all(
+            requestMessages.flatMap((message) =>
+                Array.isArray(message.content)
+                    ? message.content.flatMap((item, index) =>
+                          item.type === "image_url"
+                              ? [ensureReferenceMedia({ id: `${index}`, name: `attachment-${index + 1}.png`, type: "image/png", dataUrl: item.image_url.url })]
+                              : [],
+                      )
+                    : [],
+            ),
+        ),
+        resolvePlatformModelId(config.model || config.textModel, "text"),
+    ]);
+    throwIfAborted();
+    const requestId = crypto.randomUUID();
+    options?.onTextRequestPrepared?.(requestId, conversationId);
+    const request = createTextRequest({
+        requestId,
+        conversationId,
+        modelId,
+        canvasProjectId: options?.canvasProjectId,
+        content,
+        attachmentMediaIds,
+        parameters: config.reasoningEffort === "auto" ? {} : { reasoningEffort: config.reasoningEffort },
+    });
+    const response = options?.signal ? await waitForTextRequest(request, options.signal) : await request;
+    if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const answer = response.message.content || apiText("noContent");
+    onDelta(answer);
+    return answer;
+}
+
+function waitForTextRequest<T>(request: Promise<T>, signal: AbortSignal) {
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = () => {
+            signal.removeEventListener("abort", onAbort);
+            reject(new DOMException("Aborted", "AbortError"));
+        };
+        if (signal.aborted) return onAbort();
+        signal.addEventListener("abort", onAbort, { once: true });
+        request.then(
+            (value) => {
+                signal.removeEventListener("abort", onAbort);
+                resolve(value);
+            },
+            (error) => {
+                signal.removeEventListener("abort", onAbort);
+                reject(error);
+            },
+        );
+    });
+}
+
+async function requestPlatformImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {
+    if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const referenceMediaIds = await Promise.all(references.map(ensureReferenceMedia));
+    const created = await createGenerationBatch({
+        modelId: await resolvePlatformModelId(config.model || config.imageModel, "image"),
+        canvasProjectId: options?.canvasProjectId,
+        prompt,
+        count,
+        referenceMediaIds,
+        parameters: platformImageParameters(config),
+    });
+    options?.onBatchCreated?.({ ...created, referenceMediaIds });
+    for (;;) {
+        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        const detail = await getGenerationBatch(created.batch.id);
+        if (detail.tasks.every((task) => task.status !== "queued" && task.status !== "running")) {
+            const images = detail.tasks.flatMap((task) => (task.status === "succeeded" && task.image ? [{ id: task.id, dataUrl: task.image.url, storageKey: task.image.mediaId }] : []));
+            if (images.length) return images;
+            throw new Error(detail.tasks.find((task) => task.errorMessage)?.errorMessage || apiText("requestFailed"));
         }
-        const answer = (await requestStreamingResponse(requestConfig, {
-            model: requestConfig.model,
-            input: toResponseInput(withSystemMessage(requestConfig, messages)),
-            ...(requestConfig.reasoningEffort === "auto" ? {} : { reasoning: { effort: requestConfig.reasoningEffort } }),
-        }, onDelta, options)).content || apiText("noContent");
-        if (answer === apiText("noContent")) onDelta(answer);
-        return answer;
-    } catch (error) {
-        throw new Error(readAxiosError(error, apiText("requestFailed")));
+        await new Promise((resolve) => window.setTimeout(resolve, 1200));
     }
+}
+
+export function platformImageParameters(config: AiConfig) {
+    const size = resolveRequestSize(config.quality, config.size || "auto");
+    const quality = normalizeQuality(config.quality || "");
+    const background = normalizeBackground(config.background);
+    return { ...(size ? { size } : {}), ...(quality ? { quality } : {}), ...(background ? { background } : {}) };
+}
+
+async function ensureReferenceMedia(image: ReferenceImage) {
+    const existing = image.storageKey ? mediaId(image.storageKey) : mediaIdFromUrl(image.dataUrl || image.url || "")[0];
+    if (existing) return existing;
+    const blob = await (await fetch(image.dataUrl || image.url || "")).blob();
+    return (await uploadGenerationMedia(blob, image.name || "reference.png")).id;
+}
+
+export async function resolvePlatformImageModelId(value: string) {
+    return resolvePlatformModelId(value, "image");
+}
+
+function mediaIdFromUrl(url: string) {
+    const match = url.match(/\/api\/media\/([0-9a-f-]{36})/i);
+    return match?.[1] ? [match[1]] : [];
+}
+
+function textMessageContent(content: AiTextMessage["content"]) {
+    if (!Array.isArray(content)) return content;
+    return content.map((item) => (item.type === "text" ? item.text : "[图片附件]")).join("\n");
+}
+
+async function resolvePlatformModelId(value: string, capability: "image" | "text") {
+    const models = await getPublicModels();
+    const name = modelOptionName(value);
+    const model = models.find((item) => item.capability === capability && (item.id === value || item.id === name || item.name === name));
+    if (!model) throw new Error(capability === "image" ? "暂无可用图片模型" : "暂无可用文本模型");
+    return model.id;
 }
 
 export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat">) {

@@ -1,0 +1,104 @@
+import cookie from "@fastify/cookie";
+import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
+import Fastify from "fastify";
+import { sql } from "drizzle-orm";
+import { ZodError } from "zod";
+import { config } from "./config.js";
+import { db } from "./db/client.js";
+import { minio } from "./media.js";
+import { adminChannelRoutes } from "./routes/admin-channels.js";
+import { adminModelRoutes } from "./routes/admin-models.js";
+import { adminStatsRoutes } from "./routes/admin-stats.js";
+import { adminUserRoutes } from "./routes/admin-users.js";
+import { assetRoutes } from "./routes/assets.js";
+import { authRoutes } from "./routes/auth.js";
+import { canvasProjectRoutes } from "./routes/canvas-projects.js";
+import { generationBatchRoutes } from "./routes/generation-batches.js";
+import { mediaRoutes } from "./routes/media.js";
+import { modelRoutes, preferenceRoutes } from "./routes/models.js";
+import { textRoutes } from "./routes/text.js";
+
+export function buildApp() {
+  const app = Fastify({
+    logger: {
+      redact: {
+        paths: [
+          "req.headers.authorization",
+          "req.headers.cookie",
+          "res.headers.set-cookie",
+          "body.password",
+          "body.currentPassword",
+          "body.newPassword",
+          "body.temporaryPassword",
+          "body.apiKey",
+        ],
+        censor: "[REDACTED]",
+      },
+    },
+    trustProxy: config.TRUST_PROXY,
+    ignoreTrailingSlash: true,
+  });
+
+  app.register(cookie);
+  app.register(cors, {
+    origin: config.CORS_ORIGINS,
+    credentials: true,
+  });
+  app.register(multipart, {
+    limits: { files: 1, fileSize: config.MAX_UPLOAD_BYTES },
+  });
+
+  app.get("/health", async (_request, reply) => {
+    try {
+      await db.execute(sql`select 1`);
+      await minio.bucketExists(config.MINIO_BUCKET);
+      return { status: "ok" };
+    } catch {
+      return reply.code(503).send({ status: "unavailable" });
+    }
+  });
+
+  app.register(authRoutes, { prefix: "/api/auth" });
+  app.register(canvasProjectRoutes, { prefix: "/api/canvas-projects" });
+  app.register(generationBatchRoutes, { prefix: "/api/generation-batches" });
+  app.register(textRoutes, { prefix: "/api/text" });
+  app.register(assetRoutes, { prefix: "/api/assets" });
+  app.register(modelRoutes, { prefix: "/api/models" });
+  app.register(preferenceRoutes, { prefix: "/api" });
+  app.register(adminUserRoutes, { prefix: "/api/admin/users" });
+  app.register(adminModelRoutes, { prefix: "/api/admin/models" });
+  app.register(adminChannelRoutes, { prefix: "/api/admin/channels" });
+  app.register(adminStatsRoutes, { prefix: "/api/admin/stats" });
+  app.register(mediaRoutes, { prefix: "/api/media" });
+
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof ZodError) {
+      return reply.code(400).send({
+        error: "invalid_request",
+        message: "请求参数不正确",
+        issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })),
+      });
+    }
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
+    if (code === "FST_REQ_FILE_TOO_LARGE") {
+      return reply.code(413).send({ error: "file_too_large", message: "图片超过上传大小限制" });
+    }
+    if (code === "23505") {
+      return reply.code(409).send({ error: "conflict", message: "数据已存在" });
+    }
+    if (code === "23503") {
+      return reply.code(409).send({ error: "in_use", message: "数据仍被其他记录引用" });
+    }
+    const cause = error instanceof Error ? error : new Error(String(error));
+    app.log.error({
+      name: cause.name,
+      code,
+      message: cause.message,
+      stack: cause.stack,
+    });
+    return reply.code(500).send({ error: "internal_error", message: "服务暂时不可用" });
+  });
+
+  return app;
+}

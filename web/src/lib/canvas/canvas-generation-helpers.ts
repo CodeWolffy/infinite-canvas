@@ -111,9 +111,22 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
     };
 }
 
-export function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
+export function resetInterruptedGeneration(nodes: CanvasNodeData[], connections: CanvasConnection[] = []) {
+    const recoverableConfigIds = new Set(
+        connections.flatMap((connection) => {
+            const source = nodes.find((node) => node.id === connection.fromNodeId);
+            const target = nodes.find((node) => node.id === connection.toNodeId);
+            const hasPendingText = target?.type === CanvasNodeType.Text && target.metadata?.status === "loading" && target.metadata.textRequestId;
+            const hasPendingImages = target?.type === CanvasNodeType.Image && target.metadata?.images?.some((image) => image.status === "loading" && image.generationBatchId);
+            return source?.type === CanvasNodeType.Config && source.metadata?.status === "loading" && (hasPendingText || hasPendingImages) ? [source.id] : [];
+        }),
+    );
     return nodes.map((node) =>
-        node.metadata?.status === "loading"
+        node.type === CanvasNodeType.Config && node.metadata?.status === "loading"
+            ? recoverableConfigIds.has(node.id)
+                ? node
+                : { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } }
+            : node.metadata?.status === "loading" && !(node.type === CanvasNodeType.Text && node.metadata.textRequestId) && (!node.metadata.images?.length || node.metadata.images.every((image) => image.status !== "loading" || !image.generationBatchId))
             ? {
                   ...node,
                   metadata: {

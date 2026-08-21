@@ -2,7 +2,8 @@ import { saveAs } from "file-saver";
 
 import { createZip, readZip } from "@/lib/zip";
 import { getMediaBlob, setMediaBlob } from "@/services/file-storage";
-import { getImageBlob, setImageBlob } from "@/services/image-storage";
+import { getImageBlob, uploadImage } from "@/services/image-storage";
+import { mediaUrl } from "@/services/api/media";
 import type { Asset } from "@/stores/use-asset-store";
 
 type AssetExportFile = {
@@ -47,15 +48,23 @@ export async function readAssetPackage(file: File) {
     const assetFile = zip.get("assets.json");
     if (!assetFile) throw new Error("missing assets.json");
     const data = JSON.parse(await assetFile.text()) as AssetExportFile;
+    const storageKeys = new Map<string, string>();
     await Promise.all(
         data.files.map(async (item) => {
             const blob = zip.get(item.path);
             if (!blob) return;
             const typedBlob = blob.type ? blob : blob.slice(0, blob.size, item.mimeType);
-            await (item.storageKey.startsWith("image:") ? setImageBlob(item.storageKey, typedBlob) : setMediaBlob(item.storageKey, typedBlob));
+            if (typedBlob.type.startsWith("image/")) {
+                const image = await uploadImage(typedBlob);
+                storageKeys.set(item.storageKey, image.storageKey);
+            } else await setMediaBlob(item.storageKey, typedBlob);
         }),
     );
-    return data.assets;
+    return data.assets.map((asset) => {
+        if (asset.kind !== "image" || !asset.data.storageKey) return asset;
+        const storageKey = storageKeys.get(asset.data.storageKey);
+        return storageKey ? { ...asset, coverUrl: mediaUrl(storageKey), data: { ...asset.data, storageKey, dataUrl: mediaUrl(storageKey) } } : asset;
+    });
 }
 
 function safeFileName(value: string) {

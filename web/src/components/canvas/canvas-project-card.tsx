@@ -24,7 +24,7 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
     const selected = selectedIds.includes(project.id);
     const open = () => navigate(`/canvas/${project.id}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`);
     const saveTitle = () => {
-        renameProject(project.id, editingTitle);
+        void renameProject(project.id, editingTitle);
         stopEditing();
     };
 

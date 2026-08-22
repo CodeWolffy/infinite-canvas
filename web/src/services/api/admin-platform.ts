@@ -5,6 +5,7 @@ export type AdminModel = {
     name: string;
     displayName: string;
     capability: "image" | "text";
+    sortOrder: number;
     status: "draft" | "published" | "disabled";
     pricePerImage: string | null;
     description: string | null;
@@ -54,7 +55,7 @@ export type ModelChannelBinding = {
     updatedAt: string;
 };
 
-export type ModelInput = Pick<AdminModel, "name" | "displayName" | "capability" | "status"> & { pricePerImage?: string | number | null; description?: string | null; config?: Record<string, unknown> };
+export type ModelInput = Pick<AdminModel, "name" | "displayName" | "capability" | "status"> & { sortOrder?: number; pricePerImage?: string | number | null; description?: string | null; config?: Record<string, unknown> };
 export type ChannelInput = Pick<AdminChannel, "name" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency"> & { apiKey?: string };
 export type BindingInput = Pick<ModelChannelBinding, "upstreamModel" | "priority" | "weight" | "enabled">;
 

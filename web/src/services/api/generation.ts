@@ -5,6 +5,7 @@ export type PublicModel = {
     name: string;
     displayName: string;
     capability: "image" | "text";
+    sortOrder: number;
     description: string | null;
 };
 

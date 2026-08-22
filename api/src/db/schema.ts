@@ -86,6 +86,7 @@ export const models = pgTable(
     name: varchar("name", { length: 120 }).notNull(),
     displayName: varchar("display_name", { length: 120 }).notNull(),
     capability: modelCapability("capability").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
     status: modelStatus("status").notNull().default("draft"),
     pricePerImage: numeric("price_per_image", { precision: 14, scale: 6 }),
     description: text("description"),

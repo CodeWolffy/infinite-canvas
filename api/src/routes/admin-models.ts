@@ -12,6 +12,7 @@ const modelBody = z.object({
   name: z.string().trim().min(1).max(120),
   displayName: z.string().trim().min(1).max(120),
   capability: z.enum(["image", "text"]),
+  sortOrder: z.number().int().min(0).max(100000).default(0),
   status: z.enum(["draft", "published", "disabled"]).default("draft"),
   pricePerImage: decimal.optional(),
   description: z.string().nullable().optional(),
@@ -39,7 +40,7 @@ export async function adminModelRoutes(app: FastifyInstance) {
   app.get("/", async (request, reply) => {
     const admin = await authenticate(request, reply, { admin: true });
     if (!admin) return;
-    return { models: await db.select().from(models).where(isNull(models.deletedAt)).orderBy(asc(models.displayName)) };
+    return { models: await db.select().from(models).where(isNull(models.deletedAt)).orderBy(asc(models.sortOrder), asc(models.displayName)) };
   });
 
   app.get("/:id", async (request, reply) => {

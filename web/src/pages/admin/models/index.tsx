@@ -32,13 +32,14 @@ export default function AdminModelsPage() {
     useEffect(() => {
         if (editing === undefined) return;
         modelForm.resetFields();
-        modelForm.setFieldsValue(editing ? { name: editing.name, displayName: editing.displayName, capability: editing.capability, status: editing.status, pricePerImage: editing.pricePerImage || undefined, description: editing.description } : { capability: "image", status: "draft" });
+        modelForm.setFieldsValue(editing ? { name: editing.name, displayName: editing.displayName, capability: editing.capability, sortOrder: editing.sortOrder, status: editing.status, pricePerImage: editing.pricePerImage || undefined, description: editing.description } : { capability: "image", sortOrder: 0, status: "draft" });
     }, [editing, modelForm]);
 
     const openBinding = (model: AdminModel) => { setBindingModel(model); setEditingBindingChannelId(null); bindingForm.resetFields(); };
     const columns: TableColumnsType<AdminModel> = [
         { title: "公开名称", key: "name", width: 220, render: (_, model) => <div><div className="font-medium text-stone-950 dark:text-stone-100">{model.displayName}</div><div className="text-xs text-stone-500">{model.name}</div></div> },
         { title: "能力", dataIndex: "capability", width: 90, render: (value) => value === "image" ? "图片" : "文本" },
+        { title: "排序", dataIndex: "sortOrder", width: 80 },
         { title: "价格", dataIndex: "pricePerImage", width: 120, render: (value: string | null, model) => model.capability === "image" ? `¥${Number(value || 0).toFixed(2)} / 张` : "—" },
         { title: "状态", dataIndex: "status", width: 130, render: (status: AdminModel["status"], model) => <Select size="small" value={status} onChange={(value) => statusMutation.mutate({ id: model.id, status: value })} options={[{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "disabled", label: "已停用" }]} /> },
         { title: "说明", dataIndex: "description", ellipsis: true, render: (value: string | null) => <span className="text-stone-500">{value || "—"}</span> },
@@ -52,7 +53,7 @@ export default function AdminModelsPage() {
                 <Form<ModelValues> form={modelForm} layout="vertical" requiredMark={false} className="pt-3" onFinish={(values) => saveModel.mutate(values)}>
                     <Form.Item name="displayName" label="显示名称" rules={[{ required: true, message: "请输入显示名称" }]}><Input placeholder="例如 GPT Image 2" /></Form.Item>
                     <Form.Item name="name" label="模型标识" extra="可与其他公开模型相同；实际渠道由下方的渠道绑定决定。" rules={[{ required: true, message: "请输入模型标识" }]}><Input placeholder="例如 gpt-image-2" /></Form.Item>
-                    <div className="grid grid-cols-2 gap-4"><Form.Item name="capability" label="能力" rules={[{ required: true }]}><Select options={[{ value: "image", label: "图片" }, { value: "text", label: "文本" }]} /></Form.Item><Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "disabled", label: "已停用" }]} /></Form.Item></div>
+                    <div className="grid grid-cols-3 gap-4"><Form.Item name="capability" label="能力" rules={[{ required: true }]}><Select options={[{ value: "image", label: "图片" }, { value: "text", label: "文本" }]} /></Form.Item><Form.Item name="sortOrder" label="排序" extra="数值越小越靠前"><InputNumber min={0} precision={0} className="w-full" /></Form.Item><Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "disabled", label: "已停用" }]} /></Form.Item></div>
                     <Form.Item noStyle shouldUpdate={(previous, current) => previous.capability !== current.capability}>{({ getFieldValue }) => getFieldValue("capability") === "image" ? <Form.Item name="pricePerImage" label="价格（元 / 张）"><InputNumber min={0} precision={6} className="w-full" /></Form.Item> : null}</Form.Item>
                     <Form.Item name="description" label="说明"><Input.TextArea rows={3} /></Form.Item>
                     <Space className="flex justify-end"><Button onClick={() => setEditing(undefined)}>取消</Button><Button type="primary" htmlType="submit" loading={saveModel.isPending}>保存</Button></Space>

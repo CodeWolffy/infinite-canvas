@@ -5,6 +5,7 @@ import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { KeyRound, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Zap } from "lucide-react";
 
+import { useCopyText } from "@/hooks/use-copy-text";
 import { createAdminChannel, createAdminModel, deleteAdminChannel, fetchAdminChannelModels, getAdminChannels, getAdminModels, saveModelChannelBinding, updateAdminChannel, type AdminChannel, type ChannelInput } from "@/services/api/admin-platform";
 
 type ChannelValues = Omit<ChannelInput, "timeoutMs"> & { timeoutSeconds: number };
@@ -31,6 +32,7 @@ export default function AdminChannelsPage() {
     const [configuringUpstream, setConfiguringUpstream] = useState<string | null>(null);
     const [form] = Form.useForm<ChannelValues>();
     const [quickModelForm] = Form.useForm<QuickModelValues>();
+    const copyText = useCopyText();
     const channelsQuery = useQuery({ queryKey: ["admin", "channels"], queryFn: getAdminChannels });
     const modelsQuery = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels, enabled: Boolean(modelResult) });
     const refresh = () => queryClient.invalidateQueries({ queryKey: ["admin", "channels"] });
@@ -66,13 +68,18 @@ export default function AdminChannelsPage() {
     }, [editing, form]);
 
     const columns: TableColumnsType<AdminChannel> = [
-        { title: "渠道", key: "channel", width: 190, render: (_, channel) => <div><div className="font-medium text-stone-950 dark:text-stone-100">{channel.name}</div><div className="text-xs uppercase text-stone-500">{channel.protocol}</div></div> },
-        { title: "接口地址", dataIndex: "baseUrl", width: 260, ellipsis: true, render: (value: string) => <span className="text-stone-500" title={value}>{value}</span> },
+        { title: "渠道", key: "channel", width: 152, render: (_, channel) => <div><div className="font-medium text-stone-950 dark:text-stone-100">{channel.name}</div><div className="text-xs uppercase text-stone-500">{channel.protocol}</div></div> },
+        { title: "接口地址", dataIndex: "baseUrl", width: 221, ellipsis: true, render: (value: string) => <span className="text-stone-500" title={value}>{value}</span> },
         { title: "密钥", key: "secret", width: 130, render: (_, channel) => channel.apiKeyConfigured ? <span className="inline-flex items-center gap-1.5 text-xs text-stone-500"><KeyRound className="size-3.5" />{channel.apiKeyHint || "已配置"}</span> : <Tag color="orange">未配置</Tag> },
         { title: "并发", dataIndex: "maxConcurrency", width: 70 },
         { title: "超时", dataIndex: "timeoutMs", width: 80, render: (value: number) => `${Math.round(value / 1000)}s` },
         { title: "状态", dataIndex: "status", width: 140, render: (status: AdminChannel["status"], channel) => <Space size={4} wrap><Tag color={status === "active" ? "green" : status === "needs_attention" ? "red" : "default"}>{status === "active" ? "启用" : status === "needs_attention" ? "需检查" : "停用"}</Tag>{channel.cooldownUntil && new Date(channel.cooldownUntil) > new Date() ? <Tag color="orange">冷却中</Tag> : null}{channel.lastErrorCode && status !== "active" ? <Tooltip title={channel.lastErrorCode}><Tag color="red">异常</Tag></Tooltip> : null}</Space> },
-        { title: "最近尝试", key: "health", width: 230, render: (_, channel) => channel.lastAttempt ? <div className="text-xs text-stone-500"><div className={channel.lastAttempt.status === "succeeded" ? "text-emerald-600" : channel.lastAttempt.status === "failed" ? "text-red-500" : ""}>{channel.lastAttempt.status === "succeeded" ? "成功" : channel.lastAttempt.status === "failed" ? "失败" : "运行中"} · {channel.lastAttempt.durationMs == null ? "--" : `${(channel.lastAttempt.durationMs / 1000).toFixed(1)}s`} · {channel.lastAttempt.upstreamModel}</div><div className="mt-1 truncate" title={channel.lastAttempt.errorMessage || channel.lastAttempt.errorCategory || ""}>{channel.lastAttempt.errorMessage || channel.lastAttempt.errorCategory || dayjs(channel.lastAttempt.startedAt).format("YYYY-MM-DD HH:mm")}</div></div> : <div className="text-xs text-stone-500">{channel.lastErrorCode ? <span className="text-red-500">{channel.lastErrorCode}</span> : channel.lastSuccessAt ? dayjs(channel.lastSuccessAt).format("YYYY-MM-DD HH:mm") : "尚无尝试"}</div> },
+        { title: "最近尝试", key: "health", width: 307, render: (_, channel) => {
+            const attempt = channel.lastAttempt;
+            if (!attempt) return <div className="text-xs text-stone-500">{channel.lastErrorCode ? <span className="text-red-500">{channel.lastErrorCode}</span> : channel.lastSuccessAt ? dayjs(channel.lastSuccessAt).format("YYYY-MM-DD HH:mm") : "尚无尝试"}</div>;
+            const detail = [`${attempt.status === "succeeded" ? "成功" : attempt.status === "failed" ? "失败" : "运行中"} · ${attempt.durationMs == null ? "--" : `${(attempt.durationMs / 1000).toFixed(1)}s`} · ${attempt.upstreamModel}`, attempt.errorMessage || attempt.errorCategory || "", dayjs(attempt.startedAt).format("YYYY-MM-DD HH:mm:ss")].filter(Boolean).join("\n");
+            return <div className="cursor-pointer text-xs text-stone-500 hover:text-stone-800 dark:hover:text-stone-200" title="点击复制详情" onClick={() => copyText(detail, "最近尝试详情已复制")}><div className={attempt.status === "succeeded" ? "text-emerald-600" : attempt.status === "failed" ? "text-red-500" : ""}>{attempt.status === "succeeded" ? "成功" : attempt.status === "failed" ? "失败" : "运行中"} · {attempt.durationMs == null ? "--" : `${(attempt.durationMs / 1000).toFixed(1)}s`} · {attempt.upstreamModel}</div>{attempt.errorMessage || attempt.errorCategory ? <div className="mt-1 break-all text-stone-500">{attempt.errorMessage || attempt.errorCategory}</div> : null}<div className="mt-1 text-stone-400">{dayjs(attempt.startedAt).format("YYYY-MM-DD HH:mm:ss")}</div></div>;
+        } },
         { title: "操作", key: "actions", fixed: "right", width: 265, render: (_, channel) => <Space><Button type="text" size="small" loading={testMutation.isPending && testMutation.variables?.id === channel.id} icon={<Zap className="size-3.5" />} onClick={() => testMutation.mutate(channel)}>测试</Button><Button type="text" size="small" loading={modelsMutation.isPending && modelsMutation.variables?.id === channel.id} icon={<Settings2 className="size-3.5" />} onClick={() => modelsMutation.mutate(channel)}>配置模型</Button><Button type="text" size="small" icon={<Pencil className="size-3.5" />} onClick={() => setEditing(channel)}>编辑</Button><Button type="text" danger size="small" icon={<Trash2 className="size-3.5" />} onClick={() => modal.confirm({ title: `删除 ${channel.name}？`, content: "已被模型使用的渠道可能无法删除。", okText: "删除", cancelText: "取消", okButtonProps: { danger: true }, onOk: () => deleteMutation.mutateAsync(channel.id) })} /></Space> },
     ];
     const filteredModels = [...new Set(modelResult?.models || [])].filter((name) => name.toLowerCase().includes(modelSearch.trim().toLowerCase()));
@@ -88,7 +95,7 @@ export default function AdminChannelsPage() {
     return (
         <div className="w-full px-6 py-6 lg:px-8 lg:py-8">
             <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Provider routing</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">渠道管理</h1><p className="mt-1 text-sm text-stone-500">维护上游接口、密钥、超时和单渠道并发，密钥原值不会回显。</p></div><Button className="shrink-0" type="primary" icon={<Plus className="size-4" />} onClick={() => setEditing(null)}>创建渠道</Button></div>
-            <div className="mt-6 overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800"><Table<AdminChannel> rowKey="id" columns={columns} dataSource={channelsQuery.data || []} loading={channelsQuery.isLoading} pagination={false} scroll={{ x: 1335 }} /></div>
+            <div className="mt-6 overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800"><Table<AdminChannel> rowKey="id" columns={columns} dataSource={channelsQuery.data || []} loading={channelsQuery.isLoading} pagination={false} scroll={{ x: 1365 }} /></div>
             <Modal title={editing ? "编辑渠道" : "创建渠道"} open={editing !== undefined} footer={null} onCancel={() => setEditing(undefined)} destroyOnHidden>
                 <Form<ChannelValues> form={form} layout="vertical" requiredMark={false} className="pt-3" onFinish={(values) => saveMutation.mutate(values)}>
                     <Form.Item name="name" label="渠道名称" rules={[{ required: true, message: "请输入渠道名称" }]}><Input /></Form.Item>

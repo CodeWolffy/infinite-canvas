@@ -126,6 +126,7 @@ const NODE_STATUS_IDLE = "idle" as const;
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
+const GENERATION_RECOVERY_MAX_WAIT_MS = 10 * 60 * 1000;
 const CANVAS_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const isSupportedCanvasImage = (file: File) => CANVAS_IMAGE_TYPES.has(file.type);
 export default function CanvasPage() {
@@ -250,6 +251,7 @@ function InfiniteCanvasPage() {
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
     const restoringGenerationImagesRef = useRef(new Set<string>());
+    const generationRecoveryStartedRef = useRef(new Map<string, number>());
     const missingTextRequestsRef = useRef(new Map<string, number>());
 
     const createHistoryEntry = useCallback(
@@ -407,11 +409,50 @@ function InfiniteCanvasPage() {
             const restoreKey = `${nodeId}:${pendingImage.id}:${batchId}`;
             if (restoringGenerationImagesRef.current.has(restoreKey)) return;
             restoringGenerationImagesRef.current.add(restoreKey);
+            const recoveryStartedAt = generationRecoveryStartedRef.current.get(restoreKey) || Date.now();
+            generationRecoveryStartedRef.current.set(restoreKey, recoveryStartedAt);
             try {
                 const detail = await getGenerationBatch(batchId);
                 if (disposed) return;
-                const task = pendingImage.generationTaskId ? detail.tasks.find((item) => item.id === pendingImage.generationTaskId) : detail.tasks[0];
-                if (!task || task.status === "queued" || task.status === "running") return;
+                const task = pendingImage.generationTaskId
+                    ? detail.tasks.find((item) => item.id === pendingImage.generationTaskId)
+                    : detail.tasks.length === 1
+                      ? detail.tasks[0]
+                      : undefined;
+                if (!task) {
+                    const errorDetails = t("canvas.projectPage.generationFailed");
+                    setNodes((current) => {
+                        const updated = current.map((item) => item.id === nodeId ? { ...item, metadata: { ...item.metadata, images: item.metadata?.images?.map((image) => image.id === pendingImage.id ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image) } } : item);
+                        return updated.map((item) => {
+                            if (item.type !== CanvasNodeType.Config || item.metadata?.status !== NODE_STATUS_LOADING) return item;
+                            const children = connections.filter((connection) => connection.fromNodeId === item.id).map((connection) => updated.find((child) => child.id === connection.toNodeId)).filter((child): child is CanvasNodeData => child?.type === CanvasNodeType.Image);
+                            if (!children.length) return item;
+                            const failed = children.some((child) => child.metadata?.images?.some((image) => image.status === NODE_STATUS_ERROR));
+                            const pending = children.some((child) => child.metadata?.images?.some((image) => image.status === NODE_STATUS_LOADING));
+                            return { ...item, metadata: { ...item.metadata, status: pending ? NODE_STATUS_LOADING : failed ? NODE_STATUS_ERROR : NODE_STATUS_SUCCESS, errorDetails: failed ? errorDetails : undefined } };
+                        });
+                    });
+                    generationRecoveryStartedRef.current.delete(restoreKey);
+                    return;
+                }
+                if (task.status === "queued" || task.status === "running") {
+                    if (Date.now() - recoveryStartedAt <= GENERATION_RECOVERY_MAX_WAIT_MS) return;
+                    const errorDetails = t("canvas.projectPage.generationTimeout");
+                    setNodes((current) => {
+                        const updated = current.map((item) => item.id === nodeId ? { ...item, metadata: { ...item.metadata, images: item.metadata?.images?.map((image) => image.id === pendingImage.id ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image) } } : item);
+                        return updated.map((item) => {
+                            if (item.type !== CanvasNodeType.Config || item.metadata?.status !== NODE_STATUS_LOADING) return item;
+                            const children = connections.filter((connection) => connection.fromNodeId === item.id).map((connection) => updated.find((child) => child.id === connection.toNodeId)).filter((child): child is CanvasNodeData => child?.type === CanvasNodeType.Image);
+                            if (!children.length) return item;
+                            const failed = children.some((child) => child.metadata?.images?.some((image) => image.status === NODE_STATUS_ERROR));
+                            const pending = children.some((child) => child.metadata?.images?.some((image) => image.status === NODE_STATUS_LOADING));
+                            return { ...item, metadata: { ...item.metadata, status: pending ? NODE_STATUS_LOADING : failed ? NODE_STATUS_ERROR : NODE_STATUS_SUCCESS, errorDetails: failed ? errorDetails : undefined } };
+                        });
+                    });
+                    generationRecoveryStartedRef.current.delete(restoreKey);
+                    return;
+                }
+                generationRecoveryStartedRef.current.delete(restoreKey);
                 if (task.status !== "succeeded" || !task.image) {
                     setNodes((current) => {
                         const updated = current.map((item) => {

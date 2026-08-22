@@ -29,11 +29,12 @@ export async function modelRoutes(app: FastifyInstance) {
         name: models.name,
         displayName: models.displayName,
         capability: models.capability,
+        sortOrder: models.sortOrder,
         description: models.description,
       })
       .from(models)
       .where(and(eq(models.status, "published"), isNull(models.deletedAt)))
-      .orderBy(asc(models.displayName));
+      .orderBy(asc(models.sortOrder), asc(models.displayName));
     return { models: result };
   });
 }

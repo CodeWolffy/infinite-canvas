@@ -158,7 +158,7 @@ export async function startGenerationWorker() {
   await boss.start();
   const existingQueue = await boss.getQueue(queueName);
   if (existingQueue && existingQueue.policy !== "short") {
-    await boss.deleteQueue(queueName);
+    await boss.updateQueue(queueName, { name: queueName, policy: "short" });
   }
   await boss.createQueue(queueName, { name: queueName, policy: "short" });
   const recovered = await db

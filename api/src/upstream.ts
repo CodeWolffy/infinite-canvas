@@ -19,6 +19,16 @@ function endpoint(baseUrl: string, path: string) {
   return `${baseUrl.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
 }
 
+function isGeminiImageRelay(candidate: Pick<ChannelCandidate, "protocol" | "baseUrl" | "upstreamModel">) {
+  if (candidate.protocol === "gemini") return true;
+  if (!/(gemini|nano[- ]?banana)/i.test(candidate.upstreamModel)) return false;
+  try {
+    return new URL(candidate.baseUrl).pathname.replace(/\/$/, "").endsWith("/v1beta");
+  } catch {
+    return false;
+  }
+}
+
 function openAIParameters(parameters: Record<string, unknown>, reserved: string[]) {
   return Object.fromEntries(Object.entries(parameters).filter(([key]) => !reserved.includes(key)));
 }
@@ -152,7 +162,7 @@ export async function generateImage(
   parameters: Record<string, unknown>,
   references: ReferenceImage[],
 ) {
-  if (candidate.protocol === "openai") {
+  if (!isGeminiImageRelay(candidate)) {
     const safeParameters = openAIParameters(parameters, ["model", "prompt", "n", "response_format", "image", "image[]"]);
     const headers = candidate.apiKey ? { Authorization: `Bearer ${candidate.apiKey}` } : undefined;
     if (references.length) {
@@ -225,7 +235,14 @@ export async function generateText(
   parameters: Record<string, unknown>,
 ) {
   const { reasoningEffort, ...textParameters } = parameters;
-  if (candidate.protocol === "openai") {
+  const useGemini = candidate.protocol === "gemini" || (/(gemini|nano[- ]?banana)/i.test(candidate.upstreamModel) && (() => {
+    try {
+      return new URL(candidate.baseUrl).pathname.replace(/\/$/, "").endsWith("/v1beta");
+    } catch {
+      return false;
+    }
+  })());
+  if (!useGemini) {
     const safeParameters = openAIParameters(textParameters, ["model", "messages", "stream"]);
     const upstreamMessages = messages.map((message) =>
       message.images?.length

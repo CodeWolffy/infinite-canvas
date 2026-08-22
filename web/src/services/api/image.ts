@@ -860,7 +860,7 @@ function textMessageContent(content: AiTextMessage["content"]) {
 async function resolvePlatformModelId(value: string, capability: "image" | "text") {
     const models = await getPublicModels();
     const name = modelOptionName(value);
-    const model = models.find((item) => item.capability === capability && (item.id === value || item.id === name || item.name === name));
+    const model = models.find((item) => item.capability === capability && (item.id === value || item.id === name));
     if (!model) throw new Error(capability === "image" ? "暂无可用图片模型" : "暂无可用文本模型");
     return model.id;
 }

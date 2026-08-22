@@ -174,7 +174,7 @@ export async function generateImage(
   }
   const url = new URL(endpoint(candidate.baseUrl, `models/${encodeURIComponent(candidate.upstreamModel)}:generateContent`));
   if (candidate.apiKey) url.searchParams.set("key", candidate.apiKey);
-  const { size, quality, background, ...geminiParameters } = parameters;
+  const { size, quality, background: _background, ...geminiParameters } = parameters;
   const dimensions = typeof size === "string" ? size.match(/^(\d+)x(\d+)$/) : null;
   const qualitySize =
     typeof quality === "string"
@@ -186,12 +186,10 @@ export async function generateImage(
             ? "2K"
             : undefined
       : undefined;
-  const image = dimensions
-    ? {
-        aspectRatio: closestGeminiAspectRatio(Number(dimensions[1]), Number(dimensions[2])),
-        ...(qualitySize ? { imageSize: qualitySize } : {}),
-      }
-    : undefined;
+  const image = {
+    ...(dimensions ? { aspectRatio: closestGeminiAspectRatio(Number(dimensions[1]), Number(dimensions[2])) } : {}),
+    ...(qualitySize ? { imageSize: qualitySize } : {}),
+  };
   const response = await upstreamFetch(candidate, url.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -199,8 +197,7 @@ export async function generateImage(
       contents: [{ role: "user", parts }],
       generationConfig: {
         ...geminiParameters,
-        ...(background === "transparent" ? { responseMimeType: "image/png" } : {}),
-        ...(image ? { responseFormat: { image } } : {}),
+        ...(Object.keys(image).length ? { imageConfig: image } : {}),
         responseModalities: ["TEXT", "IMAGE"],
       },
     }),

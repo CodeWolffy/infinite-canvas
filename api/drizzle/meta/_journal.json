@@ -15,6 +15,20 @@
       "when": 1787187600000,
       "tag": "0001_media_references",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787363030663,
+      "tag": "0002_allow_duplicate_model_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787364000000,
+      "tag": "0003_soft_delete_models",
+      "breakpoints": true
     }
   ]
 }

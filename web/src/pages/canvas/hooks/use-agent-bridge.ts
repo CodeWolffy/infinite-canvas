@@ -11,6 +11,7 @@ type GenerateNodeRef = MutableRefObject<((nodeId: string, mode: CanvasNodeGenera
 type AgentBridgeParams = {
     projectId: string;
     title: string | undefined;
+    paused?: boolean;
     nodes: CanvasNodeData[];
     connections: CanvasConnection[];
     selectedNodeIds: Set<string>;
@@ -33,7 +34,7 @@ type AgentBridgeParams = {
  * to the Agent store for the local Codex panel. All members except applyAgentOps are internal.
  */
 export function useAgentBridge(params: AgentBridgeParams) {
-    const { projectId, title, nodes, connections, selectedNodeIds, viewport, nodesRef, connectionsRef, selectedNodeIdsRef, viewportRef, generateNodeRef, setNodes, setConnections, setSelectedNodeIds, setSelectedConnectionId, setViewport, setContextMenu } =
+    const { projectId, title, paused = false, nodes, connections, selectedNodeIds, viewport, nodesRef, connectionsRef, selectedNodeIdsRef, viewportRef, generateNodeRef, setNodes, setConnections, setSelectedNodeIds, setSelectedConnectionId, setViewport, setContextMenu } =
         params;
     const setAgentCanvasContext = useAgentStore((state) => state.setCanvasContext);
     const [agentUndoSnapshot, setAgentUndoSnapshot] = useState<CanvasAgentSnapshot | null>(null);
@@ -90,9 +91,11 @@ export function useAgentBridge(params: AgentBridgeParams) {
     }, [agentUndoSnapshot, projectTitle, projectId]);
 
     useEffect(() => {
+        if (paused) return;
         setAgentCanvasContext({ snapshot: agentSnapshot, applyOps: applyAgentOps, undoOps: undoAgentOps, canUndo: Boolean(agentUndoSnapshot) });
-        return () => setAgentCanvasContext(null);
-    }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, setAgentCanvasContext, undoAgentOps]);
+    }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, paused, setAgentCanvasContext, undoAgentOps]);
+
+    useEffect(() => () => setAgentCanvasContext(null), [setAgentCanvasContext]);
 
     return { applyAgentOps };
 }

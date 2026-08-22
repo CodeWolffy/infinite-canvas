@@ -80,7 +80,11 @@ export function buildApp() {
         issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })),
       });
     }
-    const code = error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
+    const code = error && typeof error === "object" && "code" in error
+      ? String(error.code)
+      : error && typeof error === "object" && "cause" in error && error.cause && typeof error.cause === "object" && "code" in error.cause
+        ? String(error.cause.code)
+        : undefined;
     if (code === "FST_REQ_FILE_TOO_LARGE") {
       return reply.code(413).send({ error: "file_too_large", message: "图片超过上传大小限制" });
     }

@@ -90,9 +90,9 @@ export const models = pgTable(
     pricePerImage: numeric("price_per_image", { precision: 14, scale: 6 }),
     description: text("description"),
     config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     ...timestamps(),
   },
-  (table) => [uniqueIndex("models_name_unique").on(table.name)],
 );
 
 export const channels = pgTable("channels", {

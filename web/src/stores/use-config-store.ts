@@ -196,7 +196,10 @@ function isAiConfigReady(config: AiConfig, model: string) {
 }
 
 function platformConfig(config: AiConfig, models: PublicModel[]): AiConfig {
-    const platformModels = models.map((model) => ({ name: model.name, displayName: model.displayName, capability: model.capability }));
+    // Platform models are selected by UUID. Their public identifiers may be
+    // shared by variants (for example, standard and 4K models routing to the
+    // same upstream model), while the display name remains user-facing.
+    const platformModels = models.map((model) => ({ name: model.id, displayName: model.displayName, capability: model.capability }));
     const channel = createModelChannel({ id: PLATFORM_CHANNEL_ID, name: "平台模型", baseUrl: "", apiKey: "", models: platformModels });
     const imageModel = platformModels.find((model) => model.capability === "image");
     const textModel = platformModels.find((model) => model.capability === "text");

@@ -391,7 +391,7 @@ function InfiniteCanvasPage() {
                 historyCommitTimerRef.current = null;
             }
         };
-    }, [activeChatId, backgroundMode, chatSessions, connections, createHistoryEntry, nodes, projectLoaded, showImageInfo]);
+    }, [activeChatId, backgroundMode, chatSessions, connections, createHistoryEntry, isNodeResizing, nodes, projectLoaded, showImageInfo]);
 
     useEffect(() => {
         if (!projectLoaded) return;
@@ -551,7 +551,7 @@ function InfiniteCanvasPage() {
     useEffect(() => {
         if (!projectLoaded || historyPausedRef.current) return;
         updateProject(projectId, { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo });
-    }, [activeChatId, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
+    }, [activeChatId, backgroundMode, chatSessions, connections, isNodeResizing, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
 
     useEffect(() => {
         if (!dialogNodeId) setNodeImageSettingsOpen(false);
@@ -788,6 +788,7 @@ function InfiniteCanvasPage() {
     const { applyAgentOps } = useAgentBridge({
         projectId,
         title: currentProject?.title,
+        paused: isNodeResizing,
         nodes,
         connections,
         selectedNodeIds,
@@ -1530,13 +1531,27 @@ function InfiniteCanvasPage() {
     );
 
     const handleNodeResize = useCallback((nodeId: string, width: number, height: number, position?: Position) => {
-        setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, width, height, position: position || node.position } : node)));
+        setNodes((prev) => {
+            let changed = false;
+            const next = prev.map((node) => {
+                if (node.id !== nodeId) return node;
+                const nextPosition = position || node.position;
+                if (node.width === width && node.height === height && node.position.x === nextPosition.x && node.position.y === nextPosition.y) return node;
+                changed = true;
+                return { ...node, width, height, position: nextPosition };
+            });
+            return changed ? next : prev;
+        });
     }, []);
 
     const handleNodeResizeStart = useCallback(() => {
+        historyPausedRef.current = true;
         setIsNodeResizing(true);
     }, []);
-    const handleNodeResizeEnd = useCallback(() => setIsNodeResizing(false), []);
+    const handleNodeResizeEnd = useCallback(() => {
+        historyPausedRef.current = false;
+        setIsNodeResizing(false);
+    }, []);
 
     const toggleNodeFreeResize = useCallback((nodeId: string) => {
         setNodes((prev) =>

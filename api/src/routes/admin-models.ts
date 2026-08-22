@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { authenticate } from "../auth/session.js";
 import { db } from "../db/client.js";
@@ -39,14 +39,14 @@ export async function adminModelRoutes(app: FastifyInstance) {
   app.get("/", async (request, reply) => {
     const admin = await authenticate(request, reply, { admin: true });
     if (!admin) return;
-    return { models: await db.select().from(models).orderBy(asc(models.displayName)) };
+    return { models: await db.select().from(models).where(isNull(models.deletedAt)).orderBy(asc(models.displayName)) };
   });
 
   app.get("/:id", async (request, reply) => {
     const admin = await authenticate(request, reply, { admin: true });
     if (!admin) return;
     const { id } = paramsSchema.parse(request.params);
-    const [model] = await db.select().from(models).where(eq(models.id, id)).limit(1);
+    const [model] = await db.select().from(models).where(and(eq(models.id, id), isNull(models.deletedAt))).limit(1);
     if (!model) return reply.code(404).send({ error: "not_found", message: "模型不存在" });
     return { model };
   });
@@ -67,7 +67,7 @@ export async function adminModelRoutes(app: FastifyInstance) {
     const [model] = await db
       .update(models)
       .set({ ...body, updatedAt: new Date() })
-      .where(eq(models.id, id))
+      .where(and(eq(models.id, id), isNull(models.deletedAt)))
       .returning();
     if (!model) return reply.code(404).send({ error: "not_found", message: "模型不存在" });
     return { model };
@@ -81,7 +81,7 @@ export async function adminModelRoutes(app: FastifyInstance) {
     const [model] = await db
       .update(models)
       .set({ status, updatedAt: new Date() })
-      .where(eq(models.id, id))
+      .where(and(eq(models.id, id), isNull(models.deletedAt)))
       .returning();
     if (!model) return reply.code(404).send({ error: "not_found", message: "模型不存在" });
     return { model };
@@ -91,7 +91,16 @@ export async function adminModelRoutes(app: FastifyInstance) {
     const admin = await authenticate(request, reply, { admin: true });
     if (!admin) return;
     const { id } = paramsSchema.parse(request.params);
-    const [model] = await db.delete(models).where(eq(models.id, id)).returning({ id: models.id });
+    const model = await db.transaction(async (tx) => {
+      const [deleted] = await tx
+        .update(models)
+        .set({ status: "disabled", deletedAt: new Date(), updatedAt: new Date() })
+        .where(and(eq(models.id, id), isNull(models.deletedAt)))
+        .returning({ id: models.id });
+      if (!deleted) return undefined;
+      await tx.delete(modelChannels).where(eq(modelChannels.modelId, id));
+      return deleted;
+    });
     if (!model) return reply.code(404).send({ error: "not_found", message: "模型不存在" });
     return reply.code(204).send();
   });

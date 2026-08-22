@@ -51,7 +51,7 @@ export default function AdminModelsPage() {
             <Modal title={editing ? "编辑模型" : "创建模型"} open={editing !== undefined} footer={null} onCancel={() => setEditing(undefined)} destroyOnHidden>
                 <Form<ModelValues> form={modelForm} layout="vertical" requiredMark={false} className="pt-3" onFinish={(values) => saveModel.mutate(values)}>
                     <Form.Item name="displayName" label="显示名称" rules={[{ required: true, message: "请输入显示名称" }]}><Input placeholder="例如 GPT Image 2" /></Form.Item>
-                    <Form.Item name="name" label="模型标识" rules={[{ required: true, message: "请输入模型标识" }]}><Input placeholder="例如 gpt-image-2" /></Form.Item>
+                    <Form.Item name="name" label="模型标识" extra="可与其他公开模型相同；实际渠道由下方的渠道绑定决定。" rules={[{ required: true, message: "请输入模型标识" }]}><Input placeholder="例如 gpt-image-2" /></Form.Item>
                     <div className="grid grid-cols-2 gap-4"><Form.Item name="capability" label="能力" rules={[{ required: true }]}><Select options={[{ value: "image", label: "图片" }, { value: "text", label: "文本" }]} /></Form.Item><Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "disabled", label: "已停用" }]} /></Form.Item></div>
                     <Form.Item noStyle shouldUpdate={(previous, current) => previous.capability !== current.capability}>{({ getFieldValue }) => getFieldValue("capability") === "image" ? <Form.Item name="pricePerImage" label="价格（元 / 张）"><InputNumber min={0} precision={6} className="w-full" /></Form.Item> : null}</Form.Item>
                     <Form.Item name="description" label="说明"><Input.TextArea rows={3} /></Form.Item>

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { authenticate } from "../auth/session.js";
 import { db } from "../db/client.js";
@@ -20,7 +20,7 @@ export async function modelRoutes(app: FastifyInstance) {
         description: models.description,
       })
       .from(models)
-      .where(eq(models.status, "published"))
+      .where(and(eq(models.status, "published"), isNull(models.deletedAt)))
       .orderBy(asc(models.displayName));
     return { models: result };
   });

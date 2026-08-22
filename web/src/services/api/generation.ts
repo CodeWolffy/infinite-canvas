@@ -46,8 +46,14 @@ export type GenerationTask = {
 
 export type GenerationBatchDetail = { batch: GenerationBatch; tasks: GenerationTask[]; referenceMediaIds: string[] };
 
+const publicModelsCacheTtl = 60_000;
+let publicModelsCache: { models: PublicModel[]; expiresAt: number } | null = null;
+
 export async function getPublicModels() {
-    return (await apiRequest<{ models: PublicModel[] }>("/api/models")).models;
+    if (!publicModelsCache || publicModelsCache.expiresAt <= Date.now()) {
+        publicModelsCache = { models: (await apiRequest<{ models: PublicModel[] }>("/api/models")).models, expiresAt: Date.now() + publicModelsCacheTtl };
+    }
+    return publicModelsCache.models;
 }
 
 export async function getGenerationPreferences() {

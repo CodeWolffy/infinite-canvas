@@ -151,12 +151,16 @@ async function processTask(taskId: string) {
 }
 
 export async function enqueueGenerationTask(taskId: string) {
-  await boss.send(queueName, { taskId }, { retryLimit: 0 });
+  await boss.send(queueName, { taskId }, { retryLimit: 0, singletonKey: taskId });
 }
 
 export async function startGenerationWorker() {
   await boss.start();
-  await boss.createQueue(queueName);
+  const existingQueue = await boss.getQueue(queueName);
+  if (existingQueue && existingQueue.policy !== "short") {
+    await boss.deleteQueue(queueName);
+  }
+  await boss.createQueue(queueName, { policy: "short" });
   const recovered = await db
     .update(generationTasks)
     .set({ status: "queued", startedAt: null, errorCode: null, errorMessage: null })

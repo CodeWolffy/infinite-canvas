@@ -15,7 +15,7 @@ import {
   models,
 } from "../db/schema.js";
 import { enqueueGenerationTask } from "../generation-worker.js";
-import { getChannelCandidates } from "../channel-scheduler.js";
+import { hasChannelCandidates } from "../channel-scheduler.js";
 import { removeUnreferencedMedia } from "../media-cleanup.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() });
@@ -97,7 +97,7 @@ export async function generationBatchRoutes(app: FastifyInstance) {
       .where(and(eq(models.id, body.modelId), eq(models.capability, "image"), eq(models.status, "published")))
       .limit(1);
     if (!model) return reply.code(400).send({ error: "invalid_model", message: "图片模型不可用" });
-    if (!(await getChannelCandidates(model.id)).length) {
+    if (!(await hasChannelCandidates(model.id))) {
       return reply.code(503).send({ error: "no_channel", message: "当前模型暂无可用渠道" });
     }
     if (body.canvasProjectId) {
@@ -177,7 +177,7 @@ export async function generationBatchRoutes(app: FastifyInstance) {
       }
       throw error;
     }
-    for (const task of result.tasks) await enqueueOrFail(task.id);
+    await Promise.all(result.tasks.map((task) => enqueueOrFail(task.id)));
     const createdTasks = await db
       .select()
       .from(generationTasks)

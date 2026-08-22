@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { authenticate } from "../auth/session.js";
-import { getChannelCandidates, runWithFailover, UpstreamError } from "../channel-scheduler.js";
+import { hasChannelCandidates, runWithFailover, UpstreamError } from "../channel-scheduler.js";
 import { config } from "../config.js";
 import { db } from "../db/client.js";
 import {
@@ -20,6 +20,7 @@ import { minio } from "../media.js";
 import { generateText } from "../upstream.js";
 
 const supportedAttachmentMime = new Set(["image/png", "image/jpeg", "image/webp"]);
+const maxHistoryMessages = 50;
 
 type AttachmentMedia = {
   id: string;
@@ -61,6 +62,10 @@ const conversationBody = z.object({
   canvasProjectId: z.string().uuid().nullable().optional(),
   title: z.string().trim().min(1).max(200).default("新对话"),
 });
+const conversationListQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+});
 
 export async function textRoutes(app: FastifyInstance) {
   app.post("/conversations", async (request, reply) => {
@@ -92,7 +97,7 @@ export async function textRoutes(app: FastifyInstance) {
       .where(and(eq(models.id, body.modelId), eq(models.capability, "text"), eq(models.status, "published")))
       .limit(1);
     if (!model) return reply.code(400).send({ error: "invalid_model", message: "文本模型不可用" });
-    if (!(await getChannelCandidates(model.id)).length) {
+    if (!(await hasChannelCandidates(model.id))) {
       return reply.code(503).send({ error: "no_channel", message: "当前模型暂无可用渠道" });
     }
     const attachmentMediaIds = [...new Set(body.attachmentMediaIds)];
@@ -187,11 +192,13 @@ export async function textRoutes(app: FastifyInstance) {
       const { conversationId, requestMessage, textRequest } = created;
 
       try {
-        const history = await db
+        const recentMessages = await db
           .select({ id: messages.id, role: messages.role, content: messages.content })
           .from(messages)
           .where(eq(messages.conversationId, conversationId))
-          .orderBy(asc(messages.createdAt));
+          .orderBy(desc(messages.createdAt))
+          .limit(maxHistoryMessages);
+        const history = recentMessages.reverse();
         const attachmentImages = await loadAttachmentImages(attachmentMedia);
         const upstreamMessages = attachmentImages.length
           ? history.map(({ id, ...message }) =>
@@ -246,12 +253,15 @@ export async function textRoutes(app: FastifyInstance) {
   app.get("/conversations", async (request, reply) => {
     const user = await authenticate(request, reply);
     if (!user) return;
+    const { limit, offset } = conversationListQuery.parse(request.query);
     return {
       conversations: await db
         .select()
         .from(conversations)
         .where(eq(conversations.userId, user.id))
-        .orderBy(asc(conversations.updatedAt)),
+        .orderBy(desc(conversations.updatedAt))
+        .limit(limit)
+        .offset(offset),
     };
   });
 

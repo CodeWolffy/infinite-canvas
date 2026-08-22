@@ -98,8 +98,10 @@ export async function adminStatsRoutes(app: FastifyInstance) {
         where gt.queued_at >= ${from} and gt.queued_at < ${to}
         ${userFilter} ${modelFilter} ${channelTaskFilter}
       ), images as (
-        select task_id, count(*)::int as image_count, coalesce(sum(billed_amount), 0)::text as cost
-        from generated_images group by task_id
+        select gi.task_id, count(*)::int as image_count, coalesce(sum(gi.billed_amount), 0)::text as cost
+        from generated_images gi
+        inner join filtered_tasks ft on ft.id = gi.task_id
+        group by gi.task_id
       )
       select u.id, u.username, u.display_name,
         count(ft.id)::int as request_count,
@@ -118,8 +120,10 @@ export async function adminStatsRoutes(app: FastifyInstance) {
         where gt.queued_at >= ${from} and gt.queued_at < ${to}
         ${userFilter} ${modelFilter} ${channelTaskFilter}
       ), images as (
-        select task_id, count(*)::int as image_count, coalesce(sum(billed_amount), 0)::text as cost
-        from generated_images group by task_id
+        select gi.task_id, count(*)::int as image_count, coalesce(sum(gi.billed_amount), 0)::text as cost
+        from generated_images gi
+        inner join filtered_tasks ft on ft.id = gi.task_id
+        group by gi.task_id
       )
       select m.id, m.name, m.display_name,
         count(ft.id)::int as request_count,

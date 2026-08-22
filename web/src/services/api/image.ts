@@ -129,6 +129,9 @@ const IMAGE_OUTPUT_FORMAT = "png";
 
 const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
 const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
+const BATCH_POLL_BASE_MS = 700;
+const BATCH_POLL_MAX_MS = 3000;
+const BATCH_MAX_WAIT_MS = 10 * 60 * 1000;
 
 function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
@@ -817,6 +820,8 @@ async function requestPlatformImages(config: AiConfig, prompt: string, reference
         parameters: platformImageParameters(config),
     });
     options?.onBatchCreated?.({ ...created, referenceMediaIds });
+    const pollStartedAt = Date.now();
+    let pollInterval = BATCH_POLL_BASE_MS;
     for (;;) {
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
         const detail = await getGenerationBatch(created.batch.id);
@@ -833,7 +838,11 @@ async function requestPlatformImages(config: AiConfig, prompt: string, reference
             if (images.length) return images;
             throw new Error(detail.tasks.find((task) => task.errorMessage)?.errorMessage || apiText("requestFailed"));
         }
-        await new Promise((resolve) => window.setTimeout(resolve, 700));
+        if (Date.now() - pollStartedAt > BATCH_MAX_WAIT_MS) {
+            throw new Error("生成等待超时，任务仍在后台执行，请稍后在生成记录中查看结果");
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, pollInterval));
+        pollInterval = Math.min(pollInterval + 500, BATCH_POLL_MAX_MS);
     }
 }
 

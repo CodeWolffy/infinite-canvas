@@ -27,6 +27,23 @@ export class UpstreamError extends Error {
   }
 }
 
+export async function hasChannelCandidates(modelId: string) {
+  const [row] = await db
+    .select({ id: channels.id })
+    .from(modelChannels)
+    .innerJoin(channels, eq(channels.id, modelChannels.channelId))
+    .where(
+      and(
+        eq(modelChannels.modelId, modelId),
+        eq(modelChannels.enabled, true),
+        eq(channels.status, "active"),
+        or(isNull(channels.cooldownUntil), lte(channels.cooldownUntil, new Date())),
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
+}
+
 function weightedShuffle(candidates: ChannelCandidate[]) {
   return candidates
     .map((candidate) => ({ candidate, key: -Math.log(Math.random() || Number.EPSILON) / candidate.weight }))
@@ -79,18 +96,20 @@ export async function withChannelSlot<T>(candidate: ChannelCandidate, action: ()
   const reserved = await sqlClient.reserve();
   let slot: number | undefined;
   try {
-    const deadline = Date.now() + candidate.timeoutMs;
+    const deadline = Date.now() + Math.max(Math.floor(candidate.timeoutMs / 2), 1000);
+    let delay = 250;
     while (slot === undefined && Date.now() < deadline) {
-      for (let current = 0; current < candidate.maxConcurrency; current += 1) {
-        const [result] = await reserved<{ locked: boolean }[]>`
-          select pg_try_advisory_lock(hashtext(${candidate.channelId})::int, ${current}::int) as locked
-        `;
-        if (result?.locked) {
-          slot = current;
-          break;
-        }
+      const [result] = await reserved<{ slot: number }[]>`
+        select slot
+        from generate_series(0, ${candidate.maxConcurrency - 1}::int) as slots(slot)
+        where pg_try_advisory_lock(hashtext(${candidate.channelId})::int, slot)
+        limit 1
+      `;
+      slot = result?.slot;
+      if (slot === undefined) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay = Math.min(delay * 2, 1000);
       }
-      if (slot === undefined) await new Promise((resolve) => setTimeout(resolve, 250));
     }
     if (slot === undefined) throw new UpstreamError("渠道并发槽位等待超时", "channel_busy", undefined, "always");
     return await action();

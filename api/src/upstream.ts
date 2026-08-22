@@ -7,10 +7,11 @@ type ReferenceImage = { buffer: Buffer; mimeType: string; filename: string };
 type TextImage = { buffer: Buffer; mimeType: string };
 type TextMessage = { role: string; content: string; images?: TextImage[] };
 const geminiAspectRatios = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
+const maxGeneratedMb = Math.round(config.MAX_GENERATED_BYTES / (1024 * 1024));
 
 function decodeBase64Image(value: string) {
   if (value.length > Math.ceil(config.MAX_GENERATED_BYTES * 4 / 3) + 16) {
-    throw new UpstreamError("生成图片超过 50MB", "image_too_large", undefined, "never");
+    throw new UpstreamError(`生成图片超过 ${maxGeneratedMb}MB`, "image_too_large", undefined, "never");
   }
   return Buffer.from(value, "base64");
 }
@@ -75,7 +76,7 @@ function classifyHttp(status: number, message: string) {
   return new UpstreamError(`上游响应异常${detail ? `：${detail}` : ""}`, "upstream_error", status, "once");
 }
 
-async function upstreamFetch(candidate: ChannelCandidate, url: string, init: RequestInit) {
+async function upstreamJson(candidate: ChannelCandidate, url: string, init: RequestInit) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), candidate.timeoutMs);
   try {
@@ -84,9 +85,10 @@ async function upstreamFetch(candidate: ChannelCandidate, url: string, init: Req
       const message = (await response.text()).slice(0, 2000);
       throw classifyHttp(response.status, message);
     }
-    return response;
+    return await response.json();
   } catch (error) {
     if (error instanceof UpstreamError) throw error;
+    if (error instanceof SyntaxError) throw new UpstreamError("上游响应不是有效 JSON", "invalid_response", undefined, "once");
     if (error instanceof Error && error.name === "AbortError") {
       throw new UpstreamError("上游请求超时", "timeout", undefined, "always");
     }
@@ -134,7 +136,7 @@ export async function downloadImage(url: string) {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok || !response.body) throw new UpstreamError("生成图片下载失败", "image_download", response.status, "once");
     const length = Number(response.headers.get("content-length") ?? 0);
-    if (length > config.MAX_GENERATED_BYTES) throw new UpstreamError("生成图片超过 50MB", "image_too_large", undefined, "never");
+    if (length > config.MAX_GENERATED_BYTES) throw new UpstreamError(`生成图片超过 ${maxGeneratedMb}MB`, "image_too_large", undefined, "never");
     const reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
     let total = 0;
@@ -183,19 +185,19 @@ export async function generateImage(
       for (const reference of references) {
         form.append("image[]", new Blob([new Uint8Array(reference.buffer)], { type: reference.mimeType }), reference.filename);
       }
-      const response = await upstreamFetch(candidate, endpoint(candidate.baseUrl, "images/edits"), {
+      const response = await upstreamJson(candidate, endpoint(candidate.baseUrl, "images/edits"), {
         method: "POST",
         headers,
         body: form,
       });
-      return decodeImageResponse(await response.json());
+      return decodeImageResponse(response);
     }
-    const response = await upstreamFetch(candidate, endpoint(candidate.baseUrl, "images/generations"), {
+    const response = await upstreamJson(candidate, endpoint(candidate.baseUrl, "images/generations"), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify({ ...safeParameters, model: candidate.upstreamModel, prompt, n: 1, response_format: "b64_json" }),
     });
-    return decodeImageResponse(await response.json());
+    return decodeImageResponse(response);
   }
 
   const parts: Array<Record<string, unknown>> = [{ text: prompt }];
@@ -220,7 +222,7 @@ export async function generateImage(
     ...(dimensions ? { aspectRatio: closestGeminiAspectRatio(Number(dimensions[1]), Number(dimensions[2])) } : {}),
     ...(qualitySize ? { imageSize: qualitySize } : {}),
   };
-  const response = await upstreamFetch(candidate, url.toString(), {
+  const response = await upstreamJson(candidate, url.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -232,7 +234,7 @@ export async function generateImage(
       },
     }),
   });
-  return decodeImageResponse(await response.json());
+  return decodeImageResponse(response);
 }
 
 export async function generateText(
@@ -264,7 +266,7 @@ export async function generateText(
           }
         : { role: message.role, content: message.content },
     );
-    const response = await upstreamFetch(candidate, endpoint(candidate.baseUrl, "chat/completions"), {
+    const value = (await upstreamJson(candidate, endpoint(candidate.baseUrl, "chat/completions"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -277,8 +279,7 @@ export async function generateText(
         messages: upstreamMessages,
         stream: false,
       }),
-    });
-    const value = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
+    })) as { choices?: Array<{ message?: { content?: unknown } }> };
     const content = value.choices?.[0]?.message?.content;
     if (typeof content !== "string") throw new UpstreamError("上游未返回文本", "invalid_response", undefined, "once");
     return content;
@@ -298,7 +299,7 @@ export async function generateText(
     }));
   const url = new URL(endpoint(candidate.baseUrl, `models/${encodeURIComponent(candidate.upstreamModel)}:generateContent`));
   if (candidate.apiKey) url.searchParams.set("key", candidate.apiKey);
-  const response = await upstreamFetch(candidate, url.toString(), {
+  const value = (await upstreamJson(candidate, url.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -306,8 +307,7 @@ export async function generateText(
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
       generationConfig: textParameters,
     }),
-  });
-  const value = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> };
+  })) as { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> };
   const content = value.candidates?.[0]?.content?.parts?.map((part) => part.text).filter((text): text is string => typeof text === "string").join("");
   if (!content) throw new UpstreamError("上游未返回文本", "invalid_response", undefined, "once");
   return content;

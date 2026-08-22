@@ -22,6 +22,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 公司内部平台模型删除：删除模型后应从管理端和普通用户模型列表隐藏，清理渠道绑定，同时保留历史图片生成、文本请求和统计记录；删除后的模型不得再次被选择。
 - Gemini 图片渠道：配置 `https://torchai.ai/v1beta` 等 Gemini `generateContent` 中转地址后，生成请求应携带 `?key=` API Key，并使用 `generationConfig.imageConfig` 和 `responseModalities`；中转站映射的 Nano Banana 图片模型应能正常返回图片，不应因错误的 `responseFormat` 字段被判定为参数错误。
 - Gemini 渠道协议兜底：即使渠道误保存为 OpenAI 协议，只要 Base URL 以 `/v1beta` 结尾且模型名为 Gemini/Nano Banana，也应自动走 `/models/:model:generateContent`，不能调用 `/images/generations`。
+- Gemini 安全审核响应：上游返回 HTTP 451 或不安全提示词时，应明确提示“内容审核拒绝”，指导用户修改提示词或参考图，并且不应切换到备用渠道。
 - 本地 Agent 恢复：登录后的普通工作台页面应能从顶部导航打开可调整宽度的 Agent 面板，画布页面应显示 Agent 按钮和紧凑连接状态，浏览器已有本地 Token 时应静默重连；Agent URL、Token、Codex 模型、技能、历史、日志和画布操作仍只属于浏览器与本地 Agent，不得写入平台渠道配置；管理后台不得挂载 Agent 面板。
 - 公司内部平台部署与恢复：Docker Compose 应启动 Web、API、PostgreSQL 和 MinIO 四个服务，只把 Web 的 3000 端口暴露给局域网；通过局域网 IP 和 1Panel 部署时登录、Cookie、反向代理和健康检查应正常，HTTP 只用于可信局域网；PostgreSQL 与 MinIO 必须按同一恢复点备份和恢复，加密主密钥需要独立备份且不得写入日志。
 - 公司内部平台图片编辑重点项：普通参考图编辑应继续可用；遮罩编辑当前由平台作为附加参考图交给上游，需要重点验证目标渠道是否符合预期遮罩语义、生成结果和错误提示是否可接受。

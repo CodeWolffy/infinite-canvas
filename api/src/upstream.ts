@@ -57,11 +57,17 @@ function upstreamMessage(message: string) {
 function classifyHttp(status: number, message: string) {
   const detail = upstreamMessage(message);
   const lower = `${message} ${detail}`.toLowerCase();
+  const contentPolicy =
+    status === 451 ||
+    (lower.includes("content") && (lower.includes("policy") || lower.includes("safety") || lower.includes("moderation"))) ||
+    lower.includes("prompt is considered unsafe") ||
+    lower.includes("prompt considered unsafe") ||
+    lower.includes("cannot be used to generate content");
+  if (contentPolicy) {
+    return new UpstreamError("内容审核拒绝：上游判定提示词或参考图不安全，请修改后重试", "content_policy", status, "never");
+  }
   if (status === 429 || status >= 500 || status === 401 || status === 403) {
     return new UpstreamError(`上游返回 HTTP ${status}${detail ? `：${detail}` : ""}`, `http_${status}`, status, "always");
-  }
-  if (lower.includes("content") && (lower.includes("policy") || lower.includes("safety") || lower.includes("moderation"))) {
-    return new UpstreamError("内容审核拒绝", "content_policy", status, "never");
   }
   if (status >= 400 && status < 500) {
     return new UpstreamError(`上游返回 HTTP ${status}${detail ? `：${detail}` : ""}`, "invalid_request", status, "never");

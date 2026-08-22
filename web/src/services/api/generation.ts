@@ -41,7 +41,7 @@ export type GenerationTask = {
     finishedAt: string | null;
     modelName: string | null;
     modelDisplayName: string | null;
-    image?: { mediaId: string; url: string };
+    image?: { mediaId: string; url: string; mimeType?: string; bytes?: number; width?: number | null; height?: number | null };
 };
 
 export type GenerationBatchDetail = { batch: GenerationBatch; tasks: GenerationTask[]; referenceMediaIds: string[] };

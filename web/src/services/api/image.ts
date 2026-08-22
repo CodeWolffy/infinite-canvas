@@ -821,11 +821,19 @@ async function requestPlatformImages(config: AiConfig, prompt: string, reference
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
         const detail = await getGenerationBatch(created.batch.id);
         if (detail.tasks.every((task) => task.status !== "queued" && task.status !== "running")) {
-            const images = detail.tasks.flatMap((task) => (task.status === "succeeded" && task.image ? [{ id: task.id, dataUrl: task.image.url, storageKey: task.image.mediaId }] : []));
+            const images = detail.tasks.flatMap((task) => (task.status === "succeeded" && task.image ? [{
+                id: task.id,
+                dataUrl: task.image.url,
+                storageKey: task.image.mediaId,
+                width: task.image.width || undefined,
+                height: task.image.height || undefined,
+                bytes: task.image.bytes || undefined,
+                mimeType: task.image.mimeType,
+            }] : []));
             if (images.length) return images;
             throw new Error(detail.tasks.find((task) => task.errorMessage)?.errorMessage || apiText("requestFailed"));
         }
-        await new Promise((resolve) => window.setTimeout(resolve, 1200));
+        await new Promise((resolve) => window.setTimeout(resolve, 700));
     }
 }
 

@@ -433,7 +433,14 @@ function InfiniteCanvasPage() {
                     });
                     return;
                 }
-                const stored = await uploadImage(task.image.url);
+                const stored = {
+                    url: task.image.url,
+                    storageKey: `image:${task.image.mediaId}`,
+                    width: task.image.width || 1,
+                    height: task.image.height || 1,
+                    bytes: task.image.bytes || 0,
+                    mimeType: task.image.mimeType || "image/png",
+                };
                 if (disposed) return;
                 setNodes((current) => {
                     const updated = current.map((item) => {
@@ -2248,7 +2255,14 @@ function InfiniteCanvasPage() {
                             generatedImages.map(async (image) => {
                                 const imageId = imageIdByTaskId.get(image.id);
                                 if (!imageId) return;
-                                const uploaded = await uploadImage(image.dataUrl);
+                                const uploaded = {
+                                    url: image.dataUrl,
+                                    storageKey: `image:${image.storageKey}`,
+                                    width: image.width || 1,
+                                    height: image.height || 1,
+                                    bytes: image.bytes || 0,
+                                    mimeType: image.mimeType || "image/png",
+                                };
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 const item: CanvasNodeImage = { id: imageId, status: NODE_STATUS_SUCCESS, content: uploaded.url, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType };
                                 setNodes((prev) =>

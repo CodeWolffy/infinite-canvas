@@ -30,7 +30,7 @@ const createBody = z.object({
   parameters: z.record(z.string(), z.unknown()).default({}),
 });
 
-function publicTask(task: typeof generationTasks.$inferSelect, mediaId?: string) {
+function publicTask(task: typeof generationTasks.$inferSelect, media?: typeof mediaObjects.$inferSelect) {
   return {
     id: task.id,
     batchId: task.batchId,
@@ -43,7 +43,16 @@ function publicTask(task: typeof generationTasks.$inferSelect, mediaId?: string)
     finishedAt: task.finishedAt,
     modelName: task.modelNameSnapshot,
     modelDisplayName: task.modelDisplayNameSnapshot,
-    ...(mediaId ? { image: { mediaId, url: `/api/media/${mediaId}` } } : {}),
+    ...(media ? {
+      image: {
+        mediaId: media.id,
+        url: `/api/media/${media.id}`,
+        mimeType: media.mimeType,
+        bytes: media.byteSize,
+        width: media.width,
+        height: media.height,
+      },
+    } : {}),
   };
 }
 
@@ -202,9 +211,10 @@ export async function generationBatchRoutes(app: FastifyInstance) {
       .limit(1);
     if (!batch) return reply.code(404).send({ error: "not_found", message: "生成批次不存在" });
     const tasks = await db
-      .select({ task: generationTasks, mediaId: generatedImages.mediaId })
+      .select({ task: generationTasks, media: mediaObjects })
       .from(generationTasks)
       .leftJoin(generatedImages, eq(generatedImages.taskId, generationTasks.id))
+      .leftJoin(mediaObjects, eq(mediaObjects.id, generatedImages.mediaId))
       .where(eq(generationTasks.batchId, id))
       .orderBy(asc(generationTasks.sequence));
     const referenceMediaIds = await db
@@ -214,7 +224,7 @@ export async function generationBatchRoutes(app: FastifyInstance) {
       .orderBy(asc(generationBatchMedia.sequence));
     return {
       batch: publicBatch(batch),
-      tasks: tasks.map(({ task, mediaId }) => publicTask(task, mediaId ?? undefined)),
+      tasks: tasks.map(({ task, media }) => publicTask(task, media ?? undefined)),
       referenceMediaIds: referenceMediaIds.map((item) => item.mediaId),
     };
   });

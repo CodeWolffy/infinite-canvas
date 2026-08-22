@@ -89,3 +89,7 @@ export function startOrphanCleanup(reportError: (error: unknown, mediaId: string
   run();
   return setInterval(run, 24 * 60 * 60 * 1000);
 }
+
+export function stopOrphanCleanup(timer: ReturnType<typeof setInterval>) {
+  clearInterval(timer);
+}

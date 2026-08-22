@@ -160,7 +160,7 @@ export async function startGenerationWorker() {
   if (existingQueue && existingQueue.policy !== "short") {
     await boss.deleteQueue(queueName);
   }
-  await boss.createQueue(queueName, { policy: "short" });
+  await boss.createQueue(queueName, { name: queueName, policy: "short" });
   const recovered = await db
     .update(generationTasks)
     .set({ status: "queued", startedAt: null, errorCode: null, errorMessage: null })

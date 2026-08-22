@@ -31,18 +31,32 @@ function closestGeminiAspectRatio(width: number, height: number) {
   });
 }
 
+function upstreamMessage(message: string) {
+  try {
+    const value = JSON.parse(message) as { error?: { message?: unknown } | unknown; message?: unknown };
+    const error = value.error;
+    const nested = error && typeof error === "object" ? (error as { message?: unknown }).message : undefined;
+    const text = nested ?? value.message;
+    if (typeof text === "string" && text.trim()) return text.trim().slice(0, 1000);
+  } catch {
+    // Keep plain-text upstream responses as-is.
+  }
+  return message.trim().replace(/\s+/g, " ").slice(0, 1000);
+}
+
 function classifyHttp(status: number, message: string) {
-  const lower = message.toLowerCase();
+  const detail = upstreamMessage(message);
+  const lower = `${message} ${detail}`.toLowerCase();
   if (status === 429 || status >= 500 || status === 401 || status === 403) {
-    return new UpstreamError(`上游返回 HTTP ${status}`, `http_${status}`, status, "always");
+    return new UpstreamError(`上游返回 HTTP ${status}${detail ? `：${detail}` : ""}`, `http_${status}`, status, "always");
   }
   if (lower.includes("content") && (lower.includes("policy") || lower.includes("safety") || lower.includes("moderation"))) {
     return new UpstreamError("内容审核拒绝", "content_policy", status, "never");
   }
   if (status >= 400 && status < 500) {
-    return new UpstreamError("请求参数被上游拒绝", "invalid_request", status, "never");
+    return new UpstreamError(`上游返回 HTTP ${status}${detail ? `：${detail}` : ""}`, "invalid_request", status, "never");
   }
-  return new UpstreamError("上游响应异常", "upstream_error", status, "once");
+  return new UpstreamError(`上游响应异常${detail ? `：${detail}` : ""}`, "upstream_error", status, "once");
 }
 
 async function upstreamFetch(candidate: ChannelCandidate, url: string, init: RequestInit) {

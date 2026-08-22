@@ -21,6 +21,7 @@
 + [修复] 修复 Gemini 图片渠道未携带 API Key 且使用错误图片配置字段导致 Nano Banana 中转请求被拒绝的问题。
 + [修复] 对配置为 OpenAI 协议但实际使用 Gemini/Nano Banana `/v1beta` 模型的渠道自动采用 `generateContent` 路由，避免误调用 `/images/generations`。
 + [优化] 将上游 HTTP 451 和不安全提示词响应明确归类为内容审核拒绝，并提示修改提示词或参考图后重试。
++ [修复] 修复平台模型选择器使用 UUID 解析图标导致所有模型显示为默认 CPU 图标的问题，并补充 GPT、Gemini/Nano Banana 等模型名称映射。
 
 ## v0.16.0 - 2026-08-18
 

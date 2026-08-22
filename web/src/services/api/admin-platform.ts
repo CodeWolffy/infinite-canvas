@@ -113,6 +113,7 @@ export async function fetchAdminChannelModels(id: string) {
 export type AdminStats = {
     range: { from: string; to: string };
     filters: { userId?: string; modelId?: string; channelId?: string };
+    storage: { totalCount: number; totalBytes: number };
     queue: { queuedCount: number; runningCount: number };
     textTotals: { requestCount: number; succeededRequestCount: number; failedRequestCount: number };
     totals: { requestCount: number; succeededTaskCount: number; averageDurationMs: number; p50DurationMs: number; p95DurationMs: number; successImageCount: number; estimatedCost: string; attemptCount: number; succeededAttemptCount: number };

@@ -46,6 +46,12 @@ export async function adminStatsRoutes(app: FastifyInstance) {
       where status in ('queued', 'running')
     `);
 
+    const storage = await db.execute(sql`
+      select count(*)::int as total_count, coalesce(sum(byte_size), 0)::float8 as total_bytes
+      from media_objects
+      where status = 'ready'
+    `);
+
     const textTotals = await db.execute(sql`
       select
         count(*)::int as request_count,
@@ -161,9 +167,14 @@ export async function adminStatsRoutes(app: FastifyInstance) {
     const total = totals[0] as Record<string, unknown> | undefined;
     const currentQueue = queue[0] as Record<string, unknown> | undefined;
     const text = textTotals[0] as Record<string, unknown> | undefined;
+    const storageRow = storage[0] as Record<string, unknown> | undefined;
     return {
       range: { from, to },
       filters: { userId: query.userId, modelId: query.modelId, channelId: query.channelId },
+      storage: {
+        totalCount: Number(storageRow?.total_count ?? 0),
+        totalBytes: Number(storageRow?.total_bytes ?? 0),
+      },
       queue: {
         queuedCount: Number(currentQueue?.queued_count ?? 0),
         runningCount: Number(currentQueue?.running_count ?? 0),

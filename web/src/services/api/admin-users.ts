@@ -15,6 +15,10 @@ export async function updateAdminUserStatus(id: string, status: UserStatus) {
     return (await apiRequest<UserResponse>(`/api/admin/users/${id}/status`, { method: "PATCH", body: { status } })).user;
 }
 
+export async function updateAdminUserRole(id: string, role: UserRole) {
+    return (await apiRequest<UserResponse>(`/api/admin/users/${id}/role`, { method: "PATCH", body: { role } })).user;
+}
+
 export async function resetAdminUserPassword(id: string, temporaryPassword: string) {
     return (await apiRequest<UserResponse>(`/api/admin/users/${id}/reset-password`, { method: "POST", body: { temporaryPassword } })).user;
 }

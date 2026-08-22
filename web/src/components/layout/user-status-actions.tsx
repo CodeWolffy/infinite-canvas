@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { useState } from "react";
 import { Dropdown, Tooltip } from "antd";
 import { BookOpen, CircleUserRound, Keyboard, LogOut, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -9,8 +10,10 @@ import { GitHubLink } from "@/components/layout/github-link";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { DOCS_URL } from "@/constant/env";
 import { changeAppLocale, type AppLocale } from "@/i18n";
+import { formatBytes } from "@/lib/image-utils";
 import { cn } from "@/lib/utils";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { getMyStorageUsage } from "@/services/api/media";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -35,6 +38,13 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
     const locale = i18n.resolvedLanguage as AppLocale;
     const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
     const languageLabel = t("topNav.switchLanguage", { language: t(nextLocale === "zh-CN" ? "locale.zhCN" : "locale.enUS") });
+    const [storageUsage, setStorageUsage] = useState("");
+    const loadStorageUsage = (open: boolean) => {
+        if (!open || storageUsage) return;
+        void getMyStorageUsage()
+            .then(({ totalCount, totalBytes }) => setStorageUsage(`${totalCount} 张图片 · ${formatBytes(totalBytes)}`))
+            .catch(() => undefined);
+    };
 
     return (
         <div className="inline-flex shrink-0 items-center gap-1">
@@ -51,10 +61,12 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
             <GitHubLink className={cn("bg-transparent hover:bg-transparent dark:hover:bg-transparent", gitHubClassName)} style={gitHubStyle} />
             <Dropdown
                 trigger={["click"]}
+                onOpenChange={loadStorageUsage}
                 menu={{
                     items: [
                         { key: "identity", disabled: true, label: <div className="min-w-32"><div className="truncate font-medium">{user?.displayName}</div><div className="truncate text-xs opacity-55">@{user?.username}</div></div> },
-                        { type: "divider" },
+                        ...(storageUsage ? [{ key: "storage", disabled: true, label: <div className="min-w-32 text-xs opacity-55">我的占用：{storageUsage}</div> }] : []),
+                        { type: "divider" as const },
                         ...(user?.role === "admin" ? [{ key: "admin", icon: <ShieldCheck className="size-4" />, label: "平台管理", onClick: () => navigate("/admin/users") }] : []),
                         { key: "logout", icon: <LogOut className="size-4" />, label: "退出登录", onClick: () => void logout().then(() => navigate("/login", { replace: true })) },
                     ],

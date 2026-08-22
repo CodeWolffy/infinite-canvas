@@ -1,37 +1,50 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag } from "antd";
+import { Alert, App, Button, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
-import { KeyRound, Plus, Search, UserRoundPlus } from "lucide-react";
+import { Copy, KeyRound, Plus, Search, UserRoundCog, UserRoundPlus } from "lucide-react";
 
-import { createAdminUser, getAdminUsers, resetAdminUserPassword, updateAdminUserStatus } from "@/services/api/admin-users";
+import { useCopyText } from "@/hooks/use-copy-text";
+import { createAdminUser, getAdminUsers, resetAdminUserPassword, updateAdminUserRole, updateAdminUserStatus } from "@/services/api/admin-users";
 import type { AuthUser, UserRole } from "@/services/api/auth";
 import { useUserStore } from "@/stores/use-user-store";
 
 type CreateValues = { username: string; displayName: string; temporaryPassword: string; role: UserRole };
+type Credential = { username: string; displayName: string; temporaryPassword: string };
 
 export default function AdminUsersPage() {
     const { message, modal } = App.useApp();
+    const copyText = useCopyText();
     const queryClient = useQueryClient();
     const currentUser = useUserStore((state) => state.user);
     const [keyword, setKeyword] = useState("");
+    const [roleFilter, setRoleFilter] = useState<UserRole | undefined>();
+    const [statusFilter, setStatusFilter] = useState<AuthUser["status"] | undefined>();
     const [createOpen, setCreateOpen] = useState(false);
     const [resettingUser, setResettingUser] = useState<AuthUser | null>(null);
+    const [roleUser, setRoleUser] = useState<AuthUser | null>(null);
+    const [roleValue, setRoleValue] = useState<UserRole>("user");
+    const [credential, setCredential] = useState<Credential | null>(null);
     const [createForm] = Form.useForm<CreateValues>();
     const [resetForm] = Form.useForm<{ temporaryPassword: string }>();
     const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: getAdminUsers });
 
     const updateUserCache = (user: AuthUser) => queryClient.setQueryData<AuthUser[]>(["admin", "users"], (users = []) => users.map((item) => (item.id === user.id ? user : item)));
-    const createMutation = useMutation({ mutationFn: createAdminUser, onSuccess: (user) => { queryClient.setQueryData<AuthUser[]>(["admin", "users"], (users = []) => [user, ...users]); setCreateOpen(false); createForm.resetFields(); message.success("用户已创建"); }, onError: showError(message.error) });
+    const createMutation = useMutation({ mutationFn: createAdminUser, onSuccess: (user, variables) => { queryClient.setQueryData<AuthUser[]>(["admin", "users"], (users = []) => [user, ...users]); setCreateOpen(false); createForm.resetFields(); setCredential({ username: user.username, displayName: user.displayName, temporaryPassword: variables.temporaryPassword }); }, onError: showError(message.error) });
     const statusMutation = useMutation({ mutationFn: ({ id, status }: { id: string; status: "active" | "disabled" }) => updateAdminUserStatus(id, status), onSuccess: (user) => { updateUserCache(user); message.success(user.status === "active" ? "账号已启用" : "账号已禁用"); }, onError: showError(message.error) });
-    const resetMutation = useMutation({ mutationFn: ({ id, temporaryPassword }: { id: string; temporaryPassword: string }) => resetAdminUserPassword(id, temporaryPassword), onSuccess: (user) => { updateUserCache(user); setResettingUser(null); resetForm.resetFields(); message.success("临时密码已重置，现有会话已失效"); }, onError: showError(message.error) });
+    const roleMutation = useMutation({ mutationFn: ({ id, role }: { id: string; role: UserRole }) => updateAdminUserRole(id, role), onSuccess: (user) => { updateUserCache(user); setRoleUser(null); message.success(user.role === "admin" ? "已设为管理员" : "已设为普通用户"); }, onError: showError(message.error) });
+    const resetMutation = useMutation({ mutationFn: ({ id, temporaryPassword }: { id: string; temporaryPassword: string }) => resetAdminUserPassword(id, temporaryPassword), onSuccess: (user, variables) => { updateUserCache(user); setResettingUser(null); resetForm.resetFields(); setCredential({ username: user.username, displayName: user.displayName, temporaryPassword: variables.temporaryPassword }); }, onError: showError(message.error) });
 
     const users = useMemo(() => {
         const normalized = keyword.trim().toLowerCase();
-        if (!normalized) return usersQuery.data || [];
-        return (usersQuery.data || []).filter((user) => `${user.displayName} ${user.username}`.toLowerCase().includes(normalized));
-    }, [keyword, usersQuery.data]);
+        return (usersQuery.data || []).filter((user) => {
+            if (roleFilter && user.role !== roleFilter) return false;
+            if (statusFilter && user.status !== statusFilter) return false;
+            if (!normalized) return true;
+            return `${user.displayName} ${user.username}`.toLowerCase().includes(normalized);
+        });
+    }, [keyword, usersQuery.data, roleFilter, statusFilter]);
 
     const changeStatus = (user: AuthUser, active: boolean) => {
         const status = active ? "active" : "disabled";
@@ -49,7 +62,7 @@ export default function AdminUsersPage() {
         { title: "最近登录", dataIndex: "lastLoginAt", width: 170, render: (value: string | null) => <span className="text-stone-500">{value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "尚未登录"}</span> },
         { title: "创建时间", dataIndex: "createdAt", width: 170, render: (value: string) => <span className="text-stone-500">{dayjs(value).format("YYYY-MM-DD HH:mm")}</span> },
         { title: "启用", dataIndex: "status", width: 90, render: (status: AuthUser["status"], user) => <Switch size="small" checked={status === "active"} disabled={user.id === currentUser?.id || statusMutation.isPending} onChange={(checked) => changeStatus(user, checked)} /> },
-        { title: "操作", key: "actions", fixed: "right", width: 120, render: (_, user) => <Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<KeyRound className="size-3.5" />} onClick={() => setResettingUser(user)}>重置密码</Button> },
+        { title: "操作", key: "actions", fixed: "right", width: 185, render: (_, user) => <Space size={0}><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<KeyRound className="size-3.5" />} onClick={() => setResettingUser(user)}>重置密码</Button><Button type="text" size="small" disabled={user.id === currentUser?.id} icon={<UserRoundCog className="size-3.5" />} onClick={() => { setRoleUser(user); setRoleValue(user.role); }}>改角色</Button></Space> },
     ];
 
     return (
@@ -60,7 +73,11 @@ export default function AdminUsersPage() {
             </div>
             <div className="mt-7 overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 p-4 dark:border-stone-800">
-                    <Input allowClear prefix={<Search className="size-4 text-stone-400" />} placeholder="搜索姓名或用户名" value={keyword} onChange={(event) => setKeyword(event.target.value)} className="max-w-xs" />
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Input allowClear prefix={<Search className="size-4 text-stone-400" />} placeholder="搜索姓名或用户名" value={keyword} onChange={(event) => setKeyword(event.target.value)} className="max-w-xs" />
+                        <Select allowClear placeholder="全部角色" value={roleFilter} onChange={setRoleFilter} className="w-32" options={[{ value: "admin", label: "管理员" }, { value: "user", label: "普通用户" }]} />
+                        <Select allowClear placeholder="全部状态" value={statusFilter} onChange={setStatusFilter} className="w-32" options={[{ value: "active", label: "已启用" }, { value: "disabled", label: "已禁用" }]} />
+                    </div>
                     <span className="text-xs text-stone-500">共 {usersQuery.data?.length || 0} 个账号</span>
                 </div>
                 <Table<AuthUser> rowKey="id" columns={columns} dataSource={users} loading={usersQuery.isLoading} pagination={false} scroll={{ x: 980 }} locale={{ emptyText: usersQuery.isError ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={usersQuery.error instanceof Error ? usersQuery.error.message : "用户加载失败"} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无用户" /> }} />
@@ -82,6 +99,32 @@ export default function AdminUsersPage() {
                     <Form.Item name="temporaryPassword" label="新临时密码" rules={[{ required: true, message: "请输入临时密码" }, { min: 10, message: "临时密码至少需要 10 位" }]}><Input.Password autoComplete="new-password" /></Form.Item>
                     <Space className="flex justify-end"><Button onClick={() => setResettingUser(null)}>取消</Button><Button type="primary" htmlType="submit" loading={resetMutation.isPending}>确认重置</Button></Space>
                 </Form>
+            </Modal>
+
+            <Modal title={`调整 ${roleUser?.displayName || "用户"} 的角色`} open={Boolean(roleUser)} footer={null} onCancel={() => setRoleUser(null)} destroyOnHidden>
+                <p className="mb-5 text-sm leading-6 text-stone-500">角色变更立即生效。降级为普通用户后，该账号将失去平台管理入口。</p>
+                <Form layout="vertical" requiredMark={false} onFinish={() => roleUser && roleMutation.mutate({ id: roleUser.id, role: roleValue })}>
+                    <Form.Item label="角色">
+                        <Select value={roleValue} onChange={setRoleValue} options={[{ value: "admin", label: "管理员" }, { value: "user", label: "普通用户" }]} />
+                    </Form.Item>
+                    <Space className="flex justify-end"><Button onClick={() => setRoleUser(null)}>取消</Button><Button type="primary" htmlType="submit" loading={roleMutation.isPending}>确认调整</Button></Space>
+                </Form>
+            </Modal>
+
+            <Modal title="账号凭据（仅显示一次）" open={Boolean(credential)} footer={null} onCancel={() => setCredential(null)} destroyOnHidden maskClosable={false}>
+                <Alert className="mt-4 mb-4" type="warning" showIcon message="请立即复制并转交给对方，关闭后将无法再次查看该临时密码。" />
+                <div className="space-y-3">
+                    {[
+                        { label: `账号（${credential?.displayName || ""}）`, value: credential?.username || "" },
+                        { label: "临时密码", value: credential?.temporaryPassword || "" },
+                    ].map((item) => (
+                        <div key={item.label} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-3 py-2.5 dark:border-stone-800">
+                            <div className="min-w-0"><div className="text-xs text-stone-500">{item.label}</div><div className="truncate font-mono text-sm font-medium">{item.value}</div></div>
+                            <Button size="small" icon={<Copy className="size-3.5" />} onClick={() => copyText(item.value, "已复制")}>复制</Button>
+                        </div>
+                    ))}
+                </div>
+                <Button type="primary" block className="mt-5" onClick={() => setCredential(null)}>我已保存</Button>
             </Modal>
         </div>
     );

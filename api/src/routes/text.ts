@@ -98,7 +98,7 @@ export async function textRoutes(app: FastifyInstance) {
       .limit(1);
     if (!model) return reply.code(400).send({ error: "invalid_model", message: "文本模型不可用" });
     if (!(await hasChannelCandidates(model.id))) {
-      return reply.code(503).send({ error: "no_channel", message: "当前模型暂无可用渠道" });
+      return reply.code(503).send({ error: "no_channel", message: "当前模型暂无可用渠道，请联系管理员在平台管理中检查渠道状态" });
     }
     const attachmentMediaIds = [...new Set(body.attachmentMediaIds)];
     let attachmentMedia: AttachmentMedia[] = [];

@@ -1,5 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, lte } from "drizzle-orm";
 import { db } from "./db/client.js";
+import { config } from "./config.js";
 import {
   assets,
   canvasProjectMedia,
@@ -52,4 +53,39 @@ export async function removeUnreferencedMedia(
       reportError(error, mediaId);
     }
   }
+}
+
+export async function cleanupOrphanMedia(reportError: (error: unknown, mediaId: string) => void) {
+  const cutoff = new Date(Date.now() - config.ORPHAN_MEDIA_GRACE_DAYS * 24 * 60 * 60 * 1000);
+  const rows = await db
+    .select({ id: mediaObjects.id })
+    .from(mediaObjects)
+    .leftJoin(assets, eq(assets.mediaId, mediaObjects.id))
+    .leftJoin(canvasProjectMedia, eq(canvasProjectMedia.mediaId, mediaObjects.id))
+    .leftJoin(generatedImages, eq(generatedImages.mediaId, mediaObjects.id))
+    .leftJoin(generationBatchMedia, eq(generationBatchMedia.mediaId, mediaObjects.id))
+    .leftJoin(messageMedia, eq(messageMedia.mediaId, mediaObjects.id))
+    .where(
+      and(
+        eq(mediaObjects.status, "ready"),
+        eq(mediaObjects.referenceCount, 0),
+        lte(mediaObjects.createdAt, cutoff),
+        isNull(assets.id),
+        isNull(canvasProjectMedia.projectId),
+        isNull(generatedImages.id),
+        isNull(generationBatchMedia.batchId),
+        isNull(messageMedia.messageId),
+      ),
+    )
+    .limit(500);
+  await removeUnreferencedMedia(rows.map((row) => row.id), reportError);
+  return rows.length;
+}
+
+export function startOrphanCleanup(reportError: (error: unknown, mediaId: string) => void) {
+  const run = () => {
+    void cleanupOrphanMedia(reportError).catch(() => undefined);
+  };
+  run();
+  return setInterval(run, 24 * 60 * 60 * 1000);
 }

@@ -56,7 +56,7 @@ function publicTask(task: typeof generationTasks.$inferSelect, media?: typeof me
   };
 }
 
-function publicBatch(batch: typeof generationBatches.$inferSelect) {
+function publicBatch(batch: typeof generationBatches.$inferSelect, summary?: BatchSummary) {
   return {
     id: batch.id,
     canvasProjectId: batch.canvasProjectId,
@@ -65,8 +65,17 @@ function publicBatch(batch: typeof generationBatches.$inferSelect) {
     requestedCount: batch.requestedCount,
     parameters: batch.parameters,
     createdAt: batch.createdAt,
+    ...(summary ? { summary } : {}),
   };
 }
+
+export type BatchSummary = {
+  totalCount: number;
+  succeededCount: number;
+  failedCount: number;
+  activeCount: number;
+  thumbnailMediaIds: string[];
+};
 
 async function enqueueOrFail(taskId: string) {
   try {
@@ -98,7 +107,7 @@ export async function generationBatchRoutes(app: FastifyInstance) {
       .limit(1);
     if (!model) return reply.code(400).send({ error: "invalid_model", message: "图片模型不可用" });
     if (!(await hasChannelCandidates(model.id))) {
-      return reply.code(503).send({ error: "no_channel", message: "当前模型暂无可用渠道" });
+      return reply.code(503).send({ error: "no_channel", message: "当前模型暂无可用渠道，请联系管理员在平台管理中检查渠道状态" });
     }
     if (body.canvasProjectId) {
       const [canvas] = await db
@@ -197,7 +206,32 @@ export async function generationBatchRoutes(app: FastifyInstance) {
       .orderBy(desc(generationBatches.createdAt))
       .limit(limit)
       .offset(offset);
-    return { batches: batches.map(publicBatch) };
+    if (!batches.length) return { batches: [] };
+    const taskRows = await db
+      .select({ batchId: generationTasks.batchId, status: generationTasks.status, mediaId: generatedImages.mediaId })
+      .from(generationTasks)
+      .leftJoin(generatedImages, eq(generatedImages.taskId, generationTasks.id))
+      .where(inArray(generationTasks.batchId, batches.map((batch) => batch.id)))
+      .orderBy(asc(generationTasks.sequence));
+    const tasksByBatch = new Map<string, typeof taskRows>();
+    for (const row of taskRows) {
+      const list = tasksByBatch.get(row.batchId) ?? [];
+      list.push(row);
+      tasksByBatch.set(row.batchId, list);
+    }
+    return {
+      batches: batches.map((batch) => {
+        const tasks = tasksByBatch.get(batch.id) ?? [];
+        const summary: BatchSummary = {
+          totalCount: tasks.length,
+          succeededCount: tasks.filter((task) => task.status === "succeeded").length,
+          failedCount: tasks.filter((task) => task.status === "failed" || task.status === "canceled").length,
+          activeCount: tasks.filter((task) => task.status === "queued" || task.status === "running").length,
+          thumbnailMediaIds: tasks.flatMap((task) => (task.mediaId ? [task.mediaId] : [])).slice(0, 4),
+        };
+        return publicBatch(batch, summary);
+      }),
+    };
   });
 
   app.get("/:id", async (request, reply) => {

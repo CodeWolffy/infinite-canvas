@@ -349,5 +349,11 @@ export const messageMedia = pgTable(
   ],
 );
 
+export const appSettings = pgTable("app_settings", {
+  key: varchar("key", { length: 80 }).primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type User = typeof users.$inferSelect;
 export type MediaObject = typeof mediaObjects.$inferSelect;

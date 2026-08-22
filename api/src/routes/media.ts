@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import { fileTypeFromBuffer } from "file-type";
 import { imageSize } from "image-size";
 import { z } from "zod";
@@ -38,6 +38,19 @@ function serializeMedia(media: typeof mediaObjects.$inferSelect) {
 }
 
 export async function mediaRoutes(app: FastifyInstance) {
+  app.get("/stats", async (request, reply) => {
+    const user = await authenticate(request, reply);
+    if (!user) return;
+    const [row] = await db
+      .select({
+        totalCount: sql<number>`count(*)::int`,
+        totalBytes: sql<number>`coalesce(sum(${mediaObjects.byteSize}), 0)::float8`,
+      })
+      .from(mediaObjects)
+      .where(and(eq(mediaObjects.ownerId, user.id), eq(mediaObjects.status, "ready")));
+    return { totalCount: Number(row?.totalCount ?? 0), totalBytes: Number(row?.totalBytes ?? 0) };
+  });
+
   app.post("/", async (request, reply) => {
     const user = await authenticate(request, reply);
     if (!user) return;

@@ -46,6 +46,16 @@ export type GenerationTask = {
 
 export type GenerationBatchDetail = { batch: GenerationBatch; tasks: GenerationTask[]; referenceMediaIds: string[] };
 
+export type GenerationBatchSummary = {
+    totalCount: number;
+    succeededCount: number;
+    failedCount: number;
+    activeCount: number;
+    thumbnailMediaIds: string[];
+};
+
+export type GenerationBatchListItem = GenerationBatch & { summary: GenerationBatchSummary };
+
 const publicModelsCacheTtl = 60_000;
 let publicModelsCache: { models: PublicModel[]; expiresAt: number } | null = null;
 
@@ -82,9 +92,9 @@ export async function createGenerationBatch(input: { modelId: string; prompt: st
 }
 
 export async function listGenerationBatches() {
-    const batches: GenerationBatch[] = [];
+    const batches: GenerationBatchListItem[] = [];
     for (;;) {
-        const page = (await apiRequest<{ batches: GenerationBatch[] }>(`/api/generation-batches?limit=100&offset=${batches.length}`)).batches;
+        const page = (await apiRequest<{ batches: GenerationBatchListItem[] }>(`/api/generation-batches?limit=100&offset=${batches.length}`)).batches;
         batches.push(...page);
         if (page.length < 100) return batches;
     }

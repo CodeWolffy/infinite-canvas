@@ -14,6 +14,7 @@ const createUserBody = z.object({
 });
 
 const statusBody = z.object({ status: z.enum(["active", "disabled"]) });
+const roleBody = z.object({ role: z.enum(["admin", "user"]) });
 const resetPasswordBody = z.object({ temporaryPassword: z.string().min(10).max(128) });
 const userParams = z.object({ id: z.string().uuid() });
 
@@ -63,6 +64,23 @@ export async function adminUserRoutes(app: FastifyInstance) {
       .returning();
     if (!user) return reply.code(404).send({ error: "not_found", message: "用户不存在" });
     if (body.status === "disabled") await revokeUserSessions(id);
+    return { user: publicUser(user) };
+  });
+
+  app.patch("/:id/role", async (request, reply) => {
+    const admin = await authenticate(request, reply, { admin: true });
+    if (!admin) return;
+    const { id } = userParams.parse(request.params);
+    const body = roleBody.parse(request.body);
+    if (id === admin.id && body.role !== "admin") {
+      return reply.code(400).send({ error: "cannot_demote_self", message: "不能降级当前账号" });
+    }
+    const [user] = await db
+      .update(users)
+      .set({ role: body.role, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    if (!user) return reply.code(404).send({ error: "not_found", message: "用户不存在" });
     return { user: publicUser(user) };
   });
 

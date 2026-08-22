@@ -1,4 +1,4 @@
-import { ApiError } from "@/services/api/request";
+import { apiRequest, ApiError } from "@/services/api/request";
 
 export type MediaRecord = {
     id: string;
@@ -10,6 +10,13 @@ export type MediaRecord = {
     createdAt: string;
     url: string;
 };
+
+export type StorageUsage = { totalCount: number; totalBytes: number };
+
+export async function getMyStorageUsage() {
+    const stats = await apiRequest<StorageUsage>("/api/media/stats");
+    return { totalCount: Number(stats.totalCount), totalBytes: Number(stats.totalBytes) };
+}
 
 export function mediaId(storageKey: string) {
     return storageKey.replace(/^image:/, "");

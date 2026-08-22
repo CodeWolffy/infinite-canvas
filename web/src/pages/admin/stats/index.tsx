@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, DatePicker, Segmented, Select, Table } from "antd";
+import { Alert, Button, DatePicker, Segmented, Select, Table } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { Activity, CircleDollarSign, Clock3, Image, ListTodo, MessageSquareText, Send, Waypoints } from "lucide-react";
+import { saveAs } from "file-saver";
+import { Activity, CircleDollarSign, Clock3, Database, Download, Image, ListTodo, MessageSquareText, Send, Waypoints } from "lucide-react";
 
 import { getAdminUsers } from "@/services/api/admin-users";
 import { getAdminChannels, getAdminModels, getAdminStats } from "@/services/api/admin-platform";
+import { formatBytes } from "@/lib/image-utils";
 
 type Filters = { range: [Dayjs, Dayjs]; userId?: string; modelId?: string; channelId?: string };
 
@@ -15,9 +17,17 @@ export default function AdminStatsPage() {
     const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: getAdminUsers });
     const modelsQuery = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels });
     const channelsQuery = useQuery({ queryKey: ["admin", "channels"], queryFn: getAdminChannels });
-    const statsQuery = useQuery({ queryKey: ["admin", "stats", filters.range[0].toISOString(), filters.range[1].toISOString(), filters.userId, filters.modelId, filters.channelId], queryFn: () => getAdminStats({ from: filters.range[0].startOf("day").toISOString(), to: filters.range[1].add(1, "day").startOf("day").toISOString(), userId: filters.userId, modelId: filters.modelId, channelId: filters.channelId }), staleTime: 0, refetchOnMount: "always", refetchOnWindowFocus: true });
+    const statsQuery = useQuery({
+        queryKey: ["admin", "stats", filters.range[0].toISOString(), filters.range[1].toISOString(), filters.userId, filters.modelId, filters.channelId],
+        queryFn: () => getAdminStats({ from: filters.range[0].startOf("day").toISOString(), to: filters.range[1].add(1, "day").startOf("day").toISOString(), userId: filters.userId, modelId: filters.modelId, channelId: filters.channelId }),
+        staleTime: 0,
+        refetchOnMount: "always",
+        refetchOnWindowFocus: true,
+        refetchInterval: (query) => ((query.state.data?.queue.queuedCount || 0) > 0 ? 5000 : false),
+    });
     const totals = statsQuery.data?.totals;
     const setPreset = (days: number) => setFilters((current) => ({ ...current, range: [dayjs().subtract(days - 1, "day").startOf("day"), dayjs().startOf("day")] }));
+    const rangeTag = dayjs().format("YYYYMMDD");
 
     return (
         <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -32,6 +42,7 @@ export default function AdminStatsPage() {
             {statsQuery.isError ? <Alert className="mt-5" type="error" showIcon message="用量统计加载失败" description={statsQuery.error.message || "请稍后重试"} /> : null}
             {statsQuery.data ? <>
             <div className="mt-4 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+                <Metric icon={Database} label="对象存储" value={`${formatBytes(statsQuery.data.storage.totalBytes)} · ${statsQuery.data.storage.totalCount} 张`} />
                 <Metric icon={Send} label="请求图片" value={totals?.requestCount || 0} />
                 <Metric icon={Image} label="成功图片" value={totals?.successImageCount || 0} />
                 <Metric icon={CircleDollarSign} label="估算费用" value={`¥${Number(totals?.estimatedCost || 0).toFixed(2)}`} />
@@ -44,27 +55,45 @@ export default function AdminStatsPage() {
                 <Metric icon={MessageSquareText} label="文本调用" value={`${statsQuery.data?.textTotals.succeededRequestCount || 0}/${statsQuery.data?.textTotals.requestCount || 0} 成功`} />
             </div>
             <div className="mt-5 grid gap-5 xl:grid-cols-2">
-                <StatsTable title="按用户" loading={statsQuery.isLoading} rows={statsQuery.data?.byUsers || []} columns={[{ title: "用户", key: "user", render: (_, row) => <div><div className="font-medium">{row.displayName}</div><div className="text-xs text-stone-500">@{row.username}</div></div> }, ...taskColumns]} />
-                <StatsTable title="按模型" loading={statsQuery.isLoading} rows={statsQuery.data?.byModels || []} columns={[{ title: "模型", key: "model", render: (_, row) => <div><div className="font-medium">{row.displayName}</div><div className="text-xs text-stone-500">{row.name}</div></div> }, ...taskColumns]} />
+                <StatsTable title="按用户" loading={statsQuery.isLoading} rows={statsQuery.data?.byUsers || []} columns={[{ title: "用户", key: "user", render: (_, row) => <div><div className="font-medium">{row.displayName}</div><div className="text-xs text-stone-500">@{row.username}</div></div> }, ...taskColumns]} onExport={() => exportCsv(`按用户-${rangeTag}.csv`, statsQuery.data?.byUsers || [], [["displayName", "用户"], ["username", "账号"], ["requestCount", "请求数"], ["successImageCount", "成功图片"], ["estimatedCost", "估算费用"]])} />
+                <StatsTable title="按模型" loading={statsQuery.isLoading} rows={statsQuery.data?.byModels || []} columns={[{ title: "模型", key: "model", render: (_, row) => <div><div className="font-medium">{row.displayName}</div><div className="text-xs text-stone-500">{row.name}</div></div> }, ...taskColumns]} onExport={() => exportCsv(`按模型-${rangeTag}.csv`, statsQuery.data?.byModels || [], [["displayName", "模型"], ["name", "标识"], ["requestCount", "请求数"], ["successImageCount", "成功图片"], ["estimatedCost", "估算费用"]])} />
             </div>
-            <div className="mt-5"><StatsTable title="按渠道尝试" loading={statsQuery.isLoading} rows={statsQuery.data?.byChannels || []} columns={[{ title: "渠道", dataIndex: "name" }, { title: "尝试数", dataIndex: "attemptCount", width: 90 }, { title: "成功数", dataIndex: "succeededAttemptCount", width: 90 }, { title: "成功率", key: "rate", width: 90, render: (_, row) => percent(row.succeededAttemptCount, row.attemptCount) }, { title: "平均耗时", dataIndex: "averageDurationMs", width: 110, render: duration }, { title: "P50", dataIndex: "p50DurationMs", width: 100, render: duration }, { title: "P95", dataIndex: "p95DurationMs", width: 100, render: duration }]} /></div>
+            <div className="mt-5"><StatsTable title="按渠道尝试" loading={statsQuery.isLoading} rows={statsQuery.data?.byChannels || []} columns={[{ title: "渠道", dataIndex: "name" }, { title: "尝试数", dataIndex: "attemptCount", width: 90, sorter: (a, b) => a.attemptCount - b.attemptCount }, { title: "成功数", dataIndex: "succeededAttemptCount", width: 90, sorter: (a, b) => a.succeededAttemptCount - b.succeededAttemptCount }, { title: "成功率", key: "rate", width: 90, render: (_, row) => percent(row.succeededAttemptCount, row.attemptCount) }, { title: "平均耗时", dataIndex: "averageDurationMs", width: 110, render: duration, sorter: (a, b) => a.averageDurationMs - b.averageDurationMs }, { title: "P50", dataIndex: "p50DurationMs", width: 100, render: duration }, { title: "P95", dataIndex: "p95DurationMs", width: 100, render: duration }]} /></div>
             </> : null}
         </div>
     );
 }
 
 const taskColumns = [
-    { title: "请求数", dataIndex: "requestCount", width: 90 },
-    { title: "成功图片", dataIndex: "successImageCount", width: 100 },
-    { title: "估算费用", dataIndex: "estimatedCost", width: 110, render: (value: string) => `¥${Number(value || 0).toFixed(2)}` },
+    { title: "请求数", dataIndex: "requestCount", width: 100, sorter: (a: { requestCount: number }, b: { requestCount: number }) => a.requestCount - b.requestCount },
+    { title: "成功图片", dataIndex: "successImageCount", width: 110, sorter: (a: { successImageCount: number }, b: { successImageCount: number }) => a.successImageCount - b.successImageCount },
+    { title: "估算费用", dataIndex: "estimatedCost", width: 120, render: (value: string) => `¥${Number(value || 0).toFixed(2)}`, sorter: (a: { estimatedCost: string }, b: { estimatedCost: string }) => Number(a.estimatedCost) - Number(b.estimatedCost) },
 ];
 
 function Metric({ icon: Icon, label, value }: { icon: typeof Send; label: string; value: string | number }) {
     return <div className="rounded-xl border border-stone-200 bg-background p-3 dark:border-stone-800"><div className="flex items-center gap-2 text-xs text-stone-500"><Icon className="size-3.5" />{label}</div><div className="mt-2 text-xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">{value}</div></div>;
 }
 
-function StatsTable<T extends { id: string }>({ title, loading, rows, columns }: { title: string; loading: boolean; rows: T[]; columns: TableColumnsType<T> }) {
-    return <section className="overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800"><div className="border-b border-stone-200 px-4 py-3 text-sm font-medium dark:border-stone-800">{title}</div><Table<T> size="small" rowKey="id" dataSource={rows} columns={columns} loading={loading} pagination={false} /></section>;
+function StatsTable<T extends { id: string }>({ title, loading, rows, columns, onExport }: { title: string; loading: boolean; rows: T[]; columns: TableColumnsType<T>; onExport?: () => void }) {
+    return (
+        <section className="overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800">
+            <div className="flex items-center justify-between border-b border-stone-200 px-4 py-2.5 dark:border-stone-800">
+                <span className="text-sm font-medium">{title}</span>
+                {onExport && rows.length ? (
+                    <Button type="text" size="small" icon={<Download className="size-3.5" />} onClick={onExport}>导出 CSV</Button>
+                ) : null}
+            </div>
+            <Table<T> size="small" rowKey="id" dataSource={rows} columns={columns} loading={loading} pagination={false} />
+        </section>
+    );
+}
+
+function exportCsv(filename: string, rows: Record<string, unknown>[], headers: [string, string][]) {
+    const lines = [
+        headers.map(([, title]) => `"${title}"`).join(","),
+        ...rows.map((row) => headers.map(([key]) => `"${String(row[key] ?? "").replace(/"/g, '""')}"`).join(",")),
+    ];
+    saveAs(new Blob([`\ufeff${lines.join("\n")}`], { type: "text/csv;charset=utf-8" }), filename);
 }
 
 function percent(value = 0, total = 0) { return total ? `${((value / total) * 100).toFixed(1)}%` : "0.0%"; }

@@ -38,6 +38,7 @@ export const requestStatus = pgEnum("request_status", [
   "canceled",
 ]);
 export const attemptStatus = pgEnum("attempt_status", ["running", "succeeded", "failed"]);
+export const requestLogType = pgEnum("request_log_type", ["image", "text", "probe"]);
 export const messageRole = pgEnum("message_role", ["system", "user", "assistant"]);
 
 export const users = pgTable(
@@ -271,6 +272,37 @@ export const generationAttempts = pgTable(
   (table) => [
     uniqueIndex("generation_attempts_task_number_unique").on(table.taskId, table.attemptNumber),
     index("generation_attempts_channel_started_idx").on(table.channelId, table.startedAt),
+  ],
+);
+
+export const requestLogs = pgTable(
+  "request_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id"),
+    type: requestLogType("type").notNull().default("image"),
+    taskId: uuid("task_id"),
+    textRequestId: uuid("text_request_id"),
+    modelId: uuid("model_id"),
+    modelNameSnapshot: varchar("model_name_snapshot", { length: 120 }),
+    modelDisplayNameSnapshot: varchar("model_display_name_snapshot", { length: 120 }),
+    channelId: uuid("channel_id"),
+    channelNameSnapshot: varchar("channel_name_snapshot", { length: 120 }),
+    upstreamModel: varchar("upstream_model", { length: 160 }),
+    status: attemptStatus("status").notNull().default("running"),
+    httpStatus: integer("http_status"),
+    errorCategory: varchar("error_category", { length: 80 }),
+    errorMessage: text("error_message"),
+    billedAmount: numeric("billed_amount", { precision: 14, scale: 6 }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    durationMs: integer("duration_ms"),
+  },
+  (table) => [
+    index("request_logs_started_idx").on(table.startedAt),
+    index("request_logs_user_started_idx").on(table.userId, table.startedAt),
+    index("request_logs_channel_started_idx").on(table.channelId, table.startedAt),
+    index("request_logs_model_started_idx").on(table.modelId, table.startedAt),
   ],
 );
 

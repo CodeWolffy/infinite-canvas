@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { App, Button, Input, Modal } from "antd";
-import { BarChart3, Cable, Images, LayoutDashboard, LogOut, Megaphone, Shapes, UsersRound } from "lucide-react";
+import { BarChart3, Cable, History, Images, LayoutDashboard, LogOut, Megaphone, Shapes, UsersRound } from "lucide-react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
@@ -13,6 +13,7 @@ const adminLinks = [
     { to: "/admin/users", label: "用户管理", icon: UsersRound },
     { to: "/admin/models", label: "模型管理", icon: Shapes },
     { to: "/admin/channels", label: "渠道管理", icon: Cable },
+    { to: "/admin/logs", label: "请求日志", icon: History },
     { to: "/admin/assets", label: "公共素材", icon: Images },
     { to: "/admin/stats", label: "用量统计", icon: BarChart3 },
 ];

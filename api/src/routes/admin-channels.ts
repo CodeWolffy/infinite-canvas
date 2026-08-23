@@ -5,6 +5,7 @@ import { authenticate } from "../auth/session.js";
 import { decryptSecret, encryptSecret, secretHint } from "../crypto.js";
 import { db } from "../db/client.js";
 import { channels } from "../db/schema.js";
+import { finishRequestLog, startRequestLog } from "../request-logs.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 const channelBody = z.object({
@@ -160,6 +161,12 @@ export async function adminChannelRoutes(app: FastifyInstance) {
     const apiKey = channel.encryptedApiKey ? decryptSecret(channel.encryptedApiKey) : undefined;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.min(channel.timeoutMs, 30000));
+    const requestLogId = await startRequestLog({
+      userId: admin.id,
+      type: "probe",
+      channelId: channel.id,
+      channelNameSnapshot: channel.name,
+    });
     try {
       const response = await fetch(modelsUrl(channel.baseUrl, channel.protocol, apiKey), {
         headers:
@@ -178,6 +185,7 @@ export async function adminChannelRoutes(app: FastifyInstance) {
             updatedAt: new Date(),
           })
           .where(eq(channels.id, id));
+        await finishRequestLog(requestLogId, { httpStatus: response.status, category: `HTTP_${response.status}`, message: `上游返回 HTTP ${response.status}` });
         return reply.code(502).send({ error: "upstream_error", message: `上游返回 HTTP ${response.status}` });
       }
       const modelNames = extractModelNames(await response.json());
@@ -186,13 +194,15 @@ export async function adminChannelRoutes(app: FastifyInstance) {
         .update(channels)
         .set({ lastSuccessAt: checkedAt, lastErrorCode: null, updatedAt: checkedAt })
         .where(eq(channels.id, id));
+      await finishRequestLog(requestLogId);
       return { models: modelNames, health: { ok: true, checkedAt } };
-    } catch {
+    } catch (error) {
       const checkedAt = new Date();
       await db
         .update(channels)
         .set({ lastFailureAt: checkedAt, lastErrorCode: "NETWORK_ERROR", updatedAt: checkedAt })
         .where(eq(channels.id, id));
+      await finishRequestLog(requestLogId, { category: error instanceof Error && error.name === "AbortError" ? "timeout" : "NETWORK_ERROR", message: "无法连接上游渠道" });
       return reply.code(502).send({ error: "upstream_unavailable", message: "无法连接上游渠道" });
     } finally {
       clearTimeout(timeout);

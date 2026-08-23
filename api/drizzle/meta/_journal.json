@@ -43,6 +43,13 @@
       "when": 1787808000000,
       "tag": "0005_model_sort_order",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787894400000,
+      "tag": "0006_request_logs",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,7 @@ import { closeDatabase, migrateDatabase } from "./db/client.js";
 import { ensureMediaBucket } from "./media.js";
 import { startOrphanCleanup, stopOrphanCleanup } from "./media-cleanup.js";
 import { startGenerationWorker, stopGenerationWorker } from "./generation-worker.js";
+import { cleanupOldRequestLogs } from "./request-logs.js";
 
 await migrateDatabase();
 await ensureMediaBucket();
@@ -12,10 +13,14 @@ await recoverInterruptedTextRequests();
 await bootstrapAdmin();
 await startGenerationWorker();
 const orphanTimer = startOrphanCleanup((error, mediaId) => console.error("[media-cleanup]", mediaId, error));
+const cleanRequestLogs = () => void cleanupOldRequestLogs().catch((error) => console.error("[request-logs]", error));
+cleanRequestLogs();
+const requestLogTimer = setInterval(cleanRequestLogs, 24 * 60 * 60 * 1000);
 
 const app = buildApp();
 const close = async () => {
   stopOrphanCleanup(orphanTimer);
+  clearInterval(requestLogTimer);
   await app.close();
   await stopGenerationWorker();
   await closeDatabase();

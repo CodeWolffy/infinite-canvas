@@ -9,6 +9,7 @@ import { db } from "./db/client.js";
 import { minio } from "./media.js";
 import { adminChannelRoutes } from "./routes/admin-channels.js";
 import { adminModelRoutes } from "./routes/admin-models.js";
+import { adminRequestLogRoutes } from "./routes/admin-request-logs.js";
 import { adminStatsRoutes } from "./routes/admin-stats.js";
 import { adminUserRoutes } from "./routes/admin-users.js";
 import { assetRoutes } from "./routes/assets.js";
@@ -69,6 +70,7 @@ export function buildApp() {
   app.register(adminUserRoutes, { prefix: "/api/admin/users" });
   app.register(adminModelRoutes, { prefix: "/api/admin/models" });
   app.register(adminChannelRoutes, { prefix: "/api/admin/channels" });
+  app.register(adminRequestLogRoutes, { prefix: "/api/admin/request-logs" });
   app.register(adminStatsRoutes, { prefix: "/api/admin/stats" });
   app.register(mediaRoutes, { prefix: "/api/media" });
 

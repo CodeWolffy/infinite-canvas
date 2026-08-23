@@ -11,8 +11,10 @@ import {
   generationBatchMedia,
   generationTasks,
   mediaObjects,
+  requestLogs,
 } from "./db/schema.js";
 import { minio } from "./media.js";
+import { finishRequestLog, startRequestLog } from "./request-logs.js";
 import { generateImage, validateGeneratedImage } from "./upstream.js";
 
 const queueName = "generate-image";
@@ -75,6 +77,17 @@ async function processTask(taskId: string) {
           attemptNumber: attemptOffset + attemptNumber,
         })
         .returning();
+      const requestLogId = await startRequestLog({
+        userId: task.userId,
+        type: "image",
+        taskId: task.id,
+        modelId: task.modelId,
+        modelNameSnapshot: task.modelNameSnapshot,
+        modelDisplayNameSnapshot: task.modelDisplayNameSnapshot,
+        channelId: channel.channelId,
+        channelNameSnapshot: channel.channelName,
+        upstreamModel: channel.upstreamModel,
+      });
       try {
         const image = await generateImage(
           channel,
@@ -88,6 +101,7 @@ async function processTask(taskId: string) {
           .update(generationAttempts)
           .set({ status: "succeeded", finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime() })
           .where(eq(generationAttempts.id, attempt!.id));
+        await finishRequestLog(requestLogId, undefined, task.priceSnapshot ?? "0");
         return { image, detected };
       } catch (error) {
         const upstream = error instanceof UpstreamError ? error : new UpstreamError("上游请求失败", "unknown", undefined, "once");
@@ -103,6 +117,7 @@ async function processTask(taskId: string) {
             durationMs: finishedAt.getTime() - startedAt.getTime(),
           })
           .where(eq(generationAttempts.id, attempt!.id));
+        await finishRequestLog(requestLogId, upstream);
         throw upstream;
       }
     });
@@ -179,6 +194,15 @@ export async function startGenerationWorker() {
         and(
           inArray(generationAttempts.taskId, recovered.map((task) => task.id)),
           eq(generationAttempts.status, "running"),
+        ),
+      );
+    await db
+      .update(requestLogs)
+      .set({ status: "failed", errorCategory: "worker_restart", errorMessage: "服务重启，中断的任务已重新排队", finishedAt: new Date() })
+      .where(
+        and(
+          inArray(requestLogs.taskId, recovered.map((task) => task.id)),
+          eq(requestLogs.status, "running"),
         ),
       );
   }

@@ -127,3 +127,36 @@ export async function getAdminStats(params: { from?: string; to?: string; userId
     const query = serializeApiParams(params);
     return await apiRequest<AdminStats>(`/api/admin/stats${query.size ? `?${query}` : ""}`);
 }
+
+export type RequestLog = {
+    id: string;
+    userId: string | null;
+    username: string | null;
+    userDisplayName: string | null;
+    type: "image" | "text" | "probe";
+    taskId: string | null;
+    textRequestId: string | null;
+    modelId: string | null;
+    modelNameSnapshot: string | null;
+    modelDisplayNameSnapshot: string | null;
+    channelId: string | null;
+    channelNameSnapshot: string | null;
+    upstreamModel: string | null;
+    status: "running" | "succeeded" | "failed";
+    httpStatus: number | null;
+    errorCategory: string | null;
+    errorMessage: string | null;
+    billedAmount: string | null;
+    startedAt: string;
+    finishedAt: string | null;
+    durationMs: number | null;
+};
+
+export async function getAdminRequestLogs(params: { from?: string; to?: string; userId?: string; modelId?: string; channelId?: string; type?: RequestLog["type"]; status?: RequestLog["status"]; limit?: number; offset?: number }) {
+    const query = serializeApiParams(params);
+    return await apiRequest<{ logs: RequestLog[]; total: number }>(`/api/admin/request-logs${query.size ? `?${query}` : ""}`);
+}
+
+export async function clearAdminRequestLogs() {
+    return (await apiRequest<{ deleted: number }>("/api/admin/request-logs", { method: "DELETE" })).deleted;
+}

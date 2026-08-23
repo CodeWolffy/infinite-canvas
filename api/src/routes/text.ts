@@ -17,6 +17,7 @@ import {
   textRequests,
 } from "../db/schema.js";
 import { minio } from "../media.js";
+import { finishRequestLog, startRequestLog } from "../request-logs.js";
 import { generateText } from "../upstream.js";
 
 const supportedAttachmentMime = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -92,7 +93,7 @@ export async function textRoutes(app: FastifyInstance) {
     if (!user) return;
     const body = createBody.parse(request.body);
     const [model] = await db
-      .select({ id: models.id })
+      .select({ id: models.id, name: models.name, displayName: models.displayName })
       .from(models)
       .where(and(eq(models.id, body.modelId), eq(models.capability, "text"), eq(models.status, "published")))
       .limit(1);
@@ -210,7 +211,26 @@ export async function textRoutes(app: FastifyInstance) {
             .update(textRequests)
             .set({ channelId: channel.channelId, upstreamModel: channel.upstreamModel })
             .where(eq(textRequests.id, textRequest.id));
-          return generateText(channel, upstreamMessages, body.parameters);
+          const requestLogId = await startRequestLog({
+            userId: user.id,
+            type: "text",
+            textRequestId: textRequest.id,
+            modelId: model.id,
+            modelNameSnapshot: model.name,
+            modelDisplayNameSnapshot: model.displayName,
+            channelId: channel.channelId,
+            channelNameSnapshot: channel.channelName,
+            upstreamModel: channel.upstreamModel,
+          });
+          try {
+            const result = await generateText(channel, upstreamMessages, body.parameters);
+            await finishRequestLog(requestLogId);
+            return result;
+          } catch (error) {
+            const upstream = error instanceof UpstreamError ? error : new UpstreamError("文本请求失败", "internal_error");
+            await finishRequestLog(requestLogId, upstream);
+            throw upstream;
+          }
         });
         const finishedAt = new Date();
         const responseMessage = await db.transaction(async (tx) => {

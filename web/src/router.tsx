@@ -6,6 +6,7 @@ import AdminLayout from "@/layouts/admin-layout";
 import UserLayout from "@/layouts/user-layout";
 import AdminAssetsPage from "@/pages/admin/assets";
 import AdminChannelsPage from "@/pages/admin/channels";
+import AdminLogsPage from "@/pages/admin/logs";
 import AdminModelsPage from "@/pages/admin/models";
 import AdminStatsPage from "@/pages/admin/stats";
 import AdminUsersPage from "@/pages/admin/users";
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
                     { path: "users", element: <AdminUsersPage /> },
                     { path: "models", element: <AdminModelsPage /> },
                     { path: "channels", element: <AdminChannelsPage /> },
+                    { path: "logs", element: <AdminLogsPage /> },
                     { path: "assets", element: <AdminAssetsPage /> },
                     { path: "stats", element: <AdminStatsPage /> },
                 ],

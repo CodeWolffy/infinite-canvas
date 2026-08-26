@@ -13,7 +13,8 @@ import { formatBytes } from "@/lib/image-utils";
 type Filters = { range: [Dayjs, Dayjs]; userId?: string; modelId?: string; channelId?: string };
 
 export default function AdminStatsPage() {
-    const [filters, setFilters] = useState<Filters>(() => ({ range: [dayjs().subtract(29, "day").startOf("day"), dayjs().startOf("day")] }));
+    const [filters, setFilters] = useState<Filters>(() => ({ range: [dayjs().startOf("day"), dayjs().startOf("day")] }));
+    const [preset, setPresetState] = useState<number | null>(1);
     const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: getAdminUsers });
     const modelsQuery = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels });
     const channelsQuery = useQuery({ queryKey: ["admin", "channels"], queryFn: getAdminChannels });
@@ -26,18 +27,19 @@ export default function AdminStatsPage() {
         refetchInterval: (query) => ((query.state.data?.queue.queuedCount || 0) > 0 ? 5000 : false),
     });
     const totals = statsQuery.data?.totals;
-    const setPreset = (days: number) => setFilters((current) => ({ ...current, range: [dayjs().subtract(days - 1, "day").startOf("day"), dayjs().startOf("day")] }));
+    const setPreset = (days: number) => { setPresetState(days); setFilters((current) => ({ ...current, range: [dayjs().subtract(days - 1, "day").startOf("day"), dayjs().startOf("day")] })); };
+    const updateFilters = <K extends keyof Filters>(key: K, value: Filters[K]) => { if (key === "range") setPresetState(null); setFilters((current) => ({ ...current, [key]: value })); };
     const rangeTag = dayjs().format("YYYYMMDD");
 
     return (
         <div className="w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
             <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Usage overview</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">用量统计</h1><p className="mt-1 text-sm text-stone-500">按时间、用户、公开模型和实际渠道查看图片任务与内部估算费用。</p></div>
             <div className="mt-7 flex flex-wrap gap-3 rounded-xl border border-stone-200 bg-background p-4 dark:border-stone-800">
-                <Segmented options={[{ label: "今天", value: 1 }, { label: "近 7 天", value: 7 }, { label: "近 30 天", value: 30 }]} onChange={(value) => setPreset(Number(value))} />
-                <DatePicker.RangePicker value={filters.range} allowClear={false} onChange={(range) => range && setFilters((current) => ({ ...current, range: range as [Dayjs, Dayjs] }))} />
-                <Select allowClear placeholder="全部用户" className="min-w-40" value={filters.userId} onChange={(userId) => setFilters((current) => ({ ...current, userId }))} options={(usersQuery.data || []).map((user) => ({ value: user.id, label: user.displayName }))} />
-                <Select allowClear placeholder="全部模型" className="min-w-44" value={filters.modelId} onChange={(modelId) => setFilters((current) => ({ ...current, modelId }))} options={(modelsQuery.data || []).map((model) => ({ value: model.id, label: model.displayName }))} />
-                <Select allowClear placeholder="全部渠道" className="min-w-40" value={filters.channelId} onChange={(channelId) => setFilters((current) => ({ ...current, channelId }))} options={(channelsQuery.data || []).map((channel) => ({ value: channel.id, label: channel.name }))} />
+                <Segmented value={preset} options={[{ label: "今天", value: 1 }, { label: "近 7 天", value: 7 }, { label: "近 30 天", value: 30 }]} onChange={(value) => setPreset(Number(value))} />
+                <DatePicker.RangePicker value={filters.range} allowClear={false} onChange={(range) => range && updateFilters("range", range as [Dayjs, Dayjs])} />
+                <Select allowClear placeholder="全部用户" className="min-w-40" value={filters.userId} onChange={(userId) => updateFilters("userId", userId)} options={(usersQuery.data || []).map((user) => ({ value: user.id, label: user.displayName }))} />
+                <Select allowClear placeholder="全部模型" className="min-w-44" value={filters.modelId} onChange={(modelId) => updateFilters("modelId", modelId)} options={(modelsQuery.data || []).map((model) => ({ value: model.id, label: model.displayName }))} />
+                <Select allowClear placeholder="全部渠道" className="min-w-40" value={filters.channelId} onChange={(channelId) => updateFilters("channelId", channelId)} options={(channelsQuery.data || []).map((channel) => ({ value: channel.id, label: channel.name }))} />
             </div>
             {statsQuery.isError ? <Alert className="mt-5" type="error" showIcon message="用量统计加载失败" description={statsQuery.error.message || "请稍后重试"} /> : null}
             {statsQuery.data ? <>

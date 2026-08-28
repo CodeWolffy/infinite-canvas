@@ -15,11 +15,29 @@ import { users } from "../db/schema.js";
 
 class SimpleRateLimiter {
   private records = new Map<string, { count: number; resetAt: number }>();
+  private readonly maxEntries = 5000;
+
+  constructor() {
+    // 每 10 分钟自动清理一次过期记录，unref 避免阻止进程正常退出
+    setInterval(() => this.cleanupExpired(), 10 * 60 * 1000).unref();
+  }
+
+  cleanupExpired(now = Date.now()) {
+    for (const [key, record] of this.records.entries()) {
+      if (now >= record.resetAt) {
+        this.records.delete(key);
+      }
+    }
+  }
 
   check(key: string, maxAttempts: number, windowMs: number): { allowed: boolean; retryAfterSeconds: number } {
     const now = Date.now();
     const current = this.records.get(key);
-    if (!current || now >= current.resetAt) {
+    if (!current) {
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+    if (now >= current.resetAt) {
+      this.records.delete(key);
       return { allowed: true, retryAfterSeconds: 0 };
     }
     if (current.count >= maxAttempts) {
@@ -31,6 +49,9 @@ class SimpleRateLimiter {
 
   recordFailure(key: string, windowMs: number) {
     const now = Date.now();
+    if (this.records.size >= this.maxEntries) {
+      this.cleanupExpired(now);
+    }
     const current = this.records.get(key);
     if (!current || now >= current.resetAt) {
       this.records.set(key, { count: 1, resetAt: now + windowMs });

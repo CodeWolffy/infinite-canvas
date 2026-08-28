@@ -18,7 +18,7 @@ import {
 } from "../db/schema.js";
 import { minio } from "../media.js";
 import { finishRequestLog, startRequestLog } from "../request-logs.js";
-import { generateText } from "../upstream.js";
+import { generateText, readStreamWithLimit } from "../upstream.js";
 
 const supportedAttachmentMime = new Set(["image/png", "image/jpeg", "image/webp"]);
 const maxHistoryMessages = 50;
@@ -35,16 +35,13 @@ async function loadAttachmentImages(media: AttachmentMedia[]) {
   return Promise.all(
     media.map(async (item) => {
       const stream = await minio.getObject(item.bucket, item.objectKey);
-      const chunks: Buffer[] = [];
-      let total = 0;
-      for await (const chunk of stream) {
-        total += chunk.length;
-        if (total > config.MAX_UPLOAD_BYTES) {
-          throw new UpstreamError("附件图片超过上传限制", "attachment_too_large", undefined, "never");
-        }
-        chunks.push(Buffer.from(chunk));
-      }
-      return { buffer: Buffer.concat(chunks), mimeType: item.mimeType };
+      const buffer = await readStreamWithLimit(
+        stream,
+        config.MAX_UPLOAD_BYTES,
+        "附件图片超过上传限制",
+        "attachment_too_large",
+      );
+      return { buffer, mimeType: item.mimeType };
     }),
   );
 }

@@ -15,7 +15,7 @@ import {
 } from "./db/schema.js";
 import { minio } from "./media.js";
 import { finishRequestLog, startRequestLog } from "./request-logs.js";
-import { generateImage, validateGeneratedImage } from "./upstream.js";
+import { generateImage, readStreamWithLimit, validateGeneratedImage } from "./upstream.js";
 
 const queueName = "generate-image";
 export const boss = new PgBoss({ connectionString: config.DATABASE_URL });
@@ -30,16 +30,13 @@ async function loadReferences(batchId: string) {
   return Promise.all(
     rows.map(async ({ media }) => {
       const stream = await minio.getObject(media.bucket, media.objectKey);
-      const chunks: Buffer[] = [];
-      let total = 0;
-      for await (const chunk of stream) {
-        total += chunk.length;
-        if (total > config.MAX_UPLOAD_BYTES) {
-          throw new UpstreamError("参考图片超过上传限制", "reference_too_large", undefined, "never");
-        }
-        chunks.push(Buffer.from(chunk));
-      }
-      return { buffer: Buffer.concat(chunks), mimeType: media.mimeType, filename: media.originalName };
+      const buffer = await readStreamWithLimit(
+        stream,
+        config.MAX_UPLOAD_BYTES,
+        "参考图片超过上传限制",
+        "reference_too_large",
+      );
+      return { buffer, mimeType: media.mimeType, filename: media.originalName };
     }),
   );
 }

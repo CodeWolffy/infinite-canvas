@@ -7,6 +7,9 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Auth rate limiter memory cleanup: login & change-password sliding window limiter periodically sweeps expired records every 10m and evicts keys on capacity limits, eliminating memory leaks.
+- Media stream abort & memory management: image download reader and MinIO stream consumption explicitly invoke `reader.cancel()` / `stream.destroy()` upon byte-limit exceeded or failure to release sockets and buffers immediately.
+- Canvas save debounce & flush on unload: canvas auto-save debounce extended to 1000ms to reduce advisory lock contention; `flushProject` triggers on route unmount / window unload to guarantee zero data loss.
 - Enterprise architecture stability & concurrency fix: channel slot concurrency uses an in-memory semaphore, freeing DB physical connections during upstream requests (up to 8m) with zero pool exhaustion; pg-boss tasks timeout extended to 3600s with standard policy.
 - Auth security & rate limiting: login and change-password endpoints enforce a 5 req/min rate limit per IP and equalize response timings with dummy argon2 verification to eliminate username enumeration side channels; admin prefix routes strictly enforce role checks.
 - Text request idempotency & crash recovery: text completions with existing active/completed `requestId` return deduplicated responses; server restarts cleanly recover interrupted text requests and update corresponding `request_logs` to failed.

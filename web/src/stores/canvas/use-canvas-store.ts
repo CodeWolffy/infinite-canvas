@@ -30,6 +30,7 @@ type CanvasStore = {
     deleteProjects: (ids: string[]) => Promise<void>;
     replaceProjects: (projects: CanvasProject[]) => void;
     updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
+    flushProject: (id: string) => Promise<void>;
 };
 
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
@@ -40,6 +41,7 @@ const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const savingProjects = new Map<string, Promise<void>>();
 const deletingProjects = new Set<string>();
 const hydratePromises = new Map<string, Promise<void>>();
+const CANVAS_SAVE_DEBOUNCE_MS = 1000;
 
 function projectSnapshot(project: CanvasProject): CanvasSnapshot {
     const { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo, viewport } = project;
@@ -55,7 +57,11 @@ function enqueueProjectUpdate(id: string, patch: { title?: string; snapshot?: Ca
     pendingUpdates.set(id, { ...pendingUpdates.get(id), ...patch });
     const timer = saveTimers.get(id);
     if (timer) clearTimeout(timer);
-    saveTimers.set(id, setTimeout(() => void flushProjectUpdate(id), 500));
+    saveTimers.set(id, setTimeout(() => void flushProjectUpdate(id), CANVAS_SAVE_DEBOUNCE_MS));
+}
+
+export async function flushProject(id: string) {
+    return flushProjectUpdate(id);
 }
 
 async function flushProjectUpdate(id: string) {
@@ -161,4 +167,5 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 }));
                 if (updated) enqueueProjectUpdate(id, { snapshot: projectSnapshot(updated) });
             },
+            flushProject: async (id) => flushProject(id),
 }));

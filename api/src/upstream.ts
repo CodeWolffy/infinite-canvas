@@ -115,6 +115,34 @@ async function decodeImageResponse(value: unknown) {
   throw new UpstreamError("上游未返回图片", "invalid_response", undefined, "once");
 }
 
+export async function readStreamWithLimit(
+  stream: NodeJS.ReadableStream | AsyncIterable<Uint8Array | Buffer>,
+  maxBytes: number,
+  errorMessage: string,
+  errorCategory = "media_too_large",
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    for await (const chunk of stream) {
+      total += chunk.length;
+      if (total > maxBytes) {
+        if ("destroy" in stream && typeof (stream as { destroy?: () => void }).destroy === "function") {
+          (stream as { destroy: () => void }).destroy();
+        }
+        throw new UpstreamError(errorMessage, errorCategory, undefined, "never");
+      }
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks, total);
+  } catch (error) {
+    if ("destroy" in stream && typeof (stream as { destroy?: () => void }).destroy === "function") {
+      (stream as { destroy: () => void }).destroy();
+    }
+    throw error;
+  }
+}
+
 export async function downloadImage(url: string) {
   const target = new URL(url);
   if (target.protocol !== "https:" && target.protocol !== "http:") {
@@ -122,22 +150,31 @@ export async function downloadImage(url: string) {
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120000);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok || !response.body) throw new UpstreamError("生成图片下载失败", "image_download", response.status, "once");
     const length = Number(response.headers.get("content-length") ?? 0);
     if (length > config.MAX_GENERATED_BYTES) throw new UpstreamError(`生成图片超过 ${maxGeneratedMb}MB`, "image_too_large", undefined, "never");
-    const reader = response.body.getReader();
+    reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
     let total = 0;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.length;
-      if (total > config.MAX_GENERATED_BYTES) throw new UpstreamError("生成图片超过 50MB", "image_too_large", undefined, "never");
+      if (total > config.MAX_GENERATED_BYTES) {
+        await reader.cancel("image_too_large").catch(() => undefined);
+        throw new UpstreamError(`生成图片超过 ${maxGeneratedMb}MB`, "image_too_large", undefined, "never");
+      }
       chunks.push(value);
     }
-    return Buffer.concat(chunks);
+    return Buffer.concat(chunks, total);
+  } catch (error) {
+    if (reader) {
+      await reader.cancel("download_failed").catch(() => undefined);
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }

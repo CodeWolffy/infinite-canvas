@@ -29,7 +29,7 @@ const schema = z.object({
   MINIO_BUCKET: z.string().min(3).max(63).default("infinite-canvas"),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(20 * 1024 * 1024),
   MAX_GENERATED_BYTES: z.coerce.number().int().positive().default(50 * 1024 * 1024),
-  IMAGE_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(20),
+  IMAGE_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(20),
   ORPHAN_MEDIA_GRACE_DAYS: z.coerce.number().int().min(1).max(365).default(7),
   REQUEST_LOG_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
 });

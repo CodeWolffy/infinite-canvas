@@ -208,11 +208,16 @@ export async function startGenerationWorker() {
     .from(generationTasks)
     .where(eq(generationTasks.status, "queued"));
   for (const task of queued) await enqueueGenerationTask(task.id);
-  await boss.work<{ taskId: string }>(
-    queueName,
-    { batchSize: config.IMAGE_WORKER_CONCURRENCY },
-    async (jobs) => Promise.all(jobs.map((job) => processTask(job.data.taskId))),
+  const workerPromises = Array.from({ length: config.IMAGE_WORKER_CONCURRENCY }, () =>
+    boss.work<{ taskId: string }>(
+      queueName,
+      { batchSize: 1 },
+      async ([job]) => {
+        if (job?.data?.taskId) await processTask(job.data.taskId);
+      },
+    ),
   );
+  await Promise.all(workerPromises);
 }
 
 export async function stopGenerationWorker() {

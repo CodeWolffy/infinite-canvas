@@ -19,9 +19,12 @@ const resetPasswordBody = z.object({ temporaryPassword: z.string().min(10).max(1
 const userParams = z.object({ id: z.string().uuid() });
 
 export async function adminUserRoutes(app: FastifyInstance) {
-  app.get("/", async (request, reply) => {
+  app.addHook("preHandler", async (request, reply) => {
     const admin = await authenticate(request, reply, { admin: true });
-    if (!admin) return;
+    if (!admin) return reply;
+  });
+
+  app.get("/", async (_request, _reply) => {
     const result = await db.select().from(users).orderBy(desc(users.createdAt));
     return { users: result.map(publicUser) };
   });

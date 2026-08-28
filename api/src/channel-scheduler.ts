@@ -1,6 +1,6 @@
 import { and, desc, eq, isNull, lte, or } from "drizzle-orm";
 import { decryptSecret } from "./crypto.js";
-import { db, sqlClient } from "./db/client.js";
+import { db } from "./db/client.js";
 import { channels, modelChannels } from "./db/schema.js";
 
 export type ChannelCandidate = {
@@ -79,9 +79,18 @@ export async function getChannelCandidates(modelId: string) {
 
   const groups = new Map<number, ChannelCandidate[]>();
   for (const row of rows) {
+    let apiKey: string | undefined;
+    if (row.encryptedApiKey) {
+      try {
+        apiKey = decryptSecret(row.encryptedApiKey);
+      } catch (err) {
+        console.warn(`[ChannelScheduler] 渠道 ${row.channelName} (${row.channelId}) 密钥解密失败，已跳过:`, err);
+        continue;
+      }
+    }
     const candidate: ChannelCandidate = {
       ...row,
-      apiKey: row.encryptedApiKey ? decryptSecret(row.encryptedApiKey) : undefined,
+      apiKey,
     };
     const group = groups.get(row.priority) ?? [];
     group.push(candidate);
@@ -92,32 +101,66 @@ export async function getChannelCandidates(modelId: string) {
     .flatMap(([, candidates]) => weightedShuffle(candidates));
 }
 
-export async function withChannelSlot<T>(candidate: ChannelCandidate, action: () => Promise<T>) {
-  const reserved = await sqlClient.reserve();
-  let slot: number | undefined;
-  try {
-    const deadline = Date.now() + Math.max(Math.floor(candidate.timeoutMs / 2), 1000);
-    let delay = 250;
-    while (slot === undefined && Date.now() < deadline) {
-      const [result] = await reserved<{ slot: number }[]>`
-        select slot
-        from generate_series(0, ${candidate.maxConcurrency - 1}::int) as slots(slot)
-        where pg_try_advisory_lock(hashtext(${candidate.channelId})::int, slot)
-        limit 1
-      `;
-      slot = result?.slot;
-      if (slot === undefined) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        delay = Math.min(delay * 2, 1000);
-      }
+class ChannelConcurrencyLimiter {
+  private running = new Map<string, number>();
+  private waiters = new Map<string, Array<() => void>>();
+
+  async acquire(channelId: string, maxConcurrency: number, timeoutMs: number): Promise<() => void> {
+    const current = this.running.get(channelId) ?? 0;
+    if (current < Math.max(1, maxConcurrency)) {
+      this.running.set(channelId, current + 1);
+      return () => this.release(channelId);
     }
-    if (slot === undefined) throw new UpstreamError("渠道并发槽位等待超时", "channel_busy", undefined, "always");
+
+    return new Promise<() => void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const queue = this.waiters.get(channelId);
+        if (queue) {
+          const idx = queue.indexOf(onAvailable);
+          if (idx !== -1) queue.splice(idx, 1);
+          if (queue.length === 0) this.waiters.delete(channelId);
+        }
+        reject(new UpstreamError("渠道并发槽位等待超时", "channel_busy", undefined, "always"));
+      }, timeoutMs);
+
+      const onAvailable = () => {
+        clearTimeout(timer);
+        this.running.set(channelId, (this.running.get(channelId) ?? 0) + 1);
+        resolve(() => this.release(channelId));
+      };
+
+      const queue = this.waiters.get(channelId) ?? [];
+      queue.push(onAvailable);
+      this.waiters.set(channelId, queue);
+    });
+  }
+
+  private release(channelId: string) {
+    const current = this.running.get(channelId) ?? 1;
+    if (current <= 1) {
+      this.running.delete(channelId);
+    } else {
+      this.running.set(channelId, current - 1);
+    }
+
+    const queue = this.waiters.get(channelId);
+    if (queue && queue.length > 0) {
+      const next = queue.shift()!;
+      if (queue.length === 0) this.waiters.delete(channelId);
+      next();
+    }
+  }
+}
+
+const limiter = new ChannelConcurrencyLimiter();
+
+export async function withChannelSlot<T>(candidate: ChannelCandidate, action: () => Promise<T>) {
+  const timeoutMs = Math.max(Math.floor(candidate.timeoutMs / 2), 1000);
+  const release = await limiter.acquire(candidate.channelId, candidate.maxConcurrency, timeoutMs);
+  try {
     return await action();
   } finally {
-    if (slot !== undefined) {
-      await reserved`select pg_advisory_unlock(hashtext(${candidate.channelId})::int, ${slot}::int)`;
-    }
-    reserved.release();
+    release();
   }
 }
 

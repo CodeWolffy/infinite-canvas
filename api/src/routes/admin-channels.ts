@@ -63,9 +63,12 @@ function extractModelNames(value: unknown) {
 }
 
 export async function adminChannelRoutes(app: FastifyInstance) {
-  app.get("/", async (request, reply) => {
+  app.addHook("preHandler", async (request, reply) => {
     const admin = await authenticate(request, reply, { admin: true });
-    if (!admin) return;
+    if (!admin) return reply;
+  });
+
+  app.get("/", async (_request, _reply) => {
     const result = await db.select().from(channels).orderBy(asc(channels.name));
     const attempts = await db.execute(sql`
       select distinct on (channel_id)

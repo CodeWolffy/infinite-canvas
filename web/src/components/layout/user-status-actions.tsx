@@ -67,7 +67,7 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
                         { key: "identity", disabled: true, label: <div className="min-w-32"><div className="truncate font-medium">{user?.displayName}</div><div className="truncate text-xs opacity-55">@{user?.username}</div></div> },
                         ...(storageUsage ? [{ key: "storage", disabled: true, label: <div className="min-w-32 text-xs opacity-55">我的占用：{storageUsage}</div> }] : []),
                         { type: "divider" as const },
-                        ...(user?.role === "admin" ? [{ key: "admin", icon: <ShieldCheck className="size-4" />, label: "平台管理", onClick: () => navigate("/admin/users") }] : []),
+                        ...(user?.role === "admin" ? [{ key: "admin", icon: <ShieldCheck className="size-4" />, label: "平台管理", onClick: () => navigate("/admin/stats") }] : []),
                         { key: "logout", icon: <LogOut className="size-4" />, label: "退出登录", onClick: () => void logout().then(() => navigate("/login", { replace: true })) },
                     ],
                 }}

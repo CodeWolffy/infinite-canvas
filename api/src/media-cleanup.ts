@@ -16,13 +16,12 @@ export async function removeUnreferencedMedia(
   reportError: (error: unknown, mediaId: string) => void,
 ) {
   for (const mediaId of [...new Set(mediaIds)]) {
-    let objectRemoved = false;
     try {
-      const media = await db.transaction(async (tx) => {
+      const mediaToDelete = await db.transaction(async (tx) => {
         const [claimed] = await tx
           .update(mediaObjects)
           .set({ status: "deleting" })
-          .where(and(eq(mediaObjects.id, mediaId), eq(mediaObjects.status, "ready"), eq(mediaObjects.referenceCount, 0)))
+          .where(and(eq(mediaObjects.id, mediaId), eq(mediaObjects.status, "ready")))
           .returning();
         if (!claimed) return undefined;
         const [[asset], [generated], [canvas], [batch], [message]] = await Promise.all([
@@ -36,20 +35,12 @@ export async function removeUnreferencedMedia(
           await tx.update(mediaObjects).set({ status: "ready" }).where(eq(mediaObjects.id, mediaId));
           return undefined;
         }
+        await tx.delete(mediaObjects).where(and(eq(mediaObjects.id, mediaId), eq(mediaObjects.status, "deleting")));
         return claimed;
       });
-      if (!media) continue;
-      await minio.removeObject(media.bucket, media.objectKey);
-      objectRemoved = true;
-      await db.delete(mediaObjects).where(and(eq(mediaObjects.id, mediaId), eq(mediaObjects.status, "deleting")));
+      if (!mediaToDelete) continue;
+      await minio.removeObject(mediaToDelete.bucket, mediaToDelete.objectKey);
     } catch (error) {
-      if (!objectRemoved) {
-        try {
-          await db.update(mediaObjects).set({ status: "ready" }).where(and(eq(mediaObjects.id, mediaId), eq(mediaObjects.status, "deleting")));
-        } catch (restoreError) {
-          reportError(restoreError, mediaId);
-        }
-      }
       reportError(error, mediaId);
     }
   }

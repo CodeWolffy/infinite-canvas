@@ -150,6 +150,32 @@ export async function textRoutes(app: FastifyInstance) {
       if (!owned) return reply.code(404).send({ error: "not_found", message: "对话不存在" });
     }
 
+    const [existingRequest] = await db
+      .select({
+        id: textRequests.id,
+        status: textRequests.status,
+        responseMessageId: textRequests.responseMessageId,
+      })
+      .from(textRequests)
+      .where(and(eq(textRequests.id, body.requestId), eq(textRequests.userId, user.id)))
+      .limit(1);
+
+    if (existingRequest) {
+      if (existingRequest.status === "succeeded" && existingRequest.responseMessageId) {
+        const [existingResponse] = await db
+          .select()
+          .from(messages)
+          .where(eq(messages.id, existingRequest.responseMessageId))
+          .limit(1);
+        if (existingResponse) {
+          return { message: existingResponse };
+        }
+      }
+      if (existingRequest.status === "running") {
+        return reply.code(409).send({ error: "request_in_progress", message: "请求正在处理中，请稍候" });
+      }
+    }
+
     const startedAt = new Date();
     try {
       const created = await db.transaction(async (tx) => {

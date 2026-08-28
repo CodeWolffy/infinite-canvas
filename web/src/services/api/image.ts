@@ -808,6 +808,26 @@ function waitForTextRequest<T>(request: Promise<T>, signal: AbortSignal) {
     });
 }
 
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+        }
+        const timer = window.setTimeout(() => {
+            if (signal) signal.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            window.clearTimeout(timer);
+            reject(new DOMException("Aborted", "AbortError"));
+        };
+        if (signal) {
+            signal.addEventListener("abort", onAbort, { once: true });
+        }
+    });
+}
+
 async function requestPlatformImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {
     if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const referenceMediaIds = await Promise.all(references.map(ensureReferenceMedia));
@@ -841,7 +861,7 @@ async function requestPlatformImages(config: AiConfig, prompt: string, reference
         if (Date.now() - pollStartedAt > BATCH_MAX_WAIT_MS) {
             throw new Error("生成等待超时，任务仍在后台执行，请稍后在生成记录中查看结果");
         }
-        await new Promise((resolve) => window.setTimeout(resolve, pollInterval));
+        await sleepWithSignal(pollInterval, options?.signal);
         pollInterval = Math.min(pollInterval + 500, BATCH_POLL_MAX_MS);
     }
 }

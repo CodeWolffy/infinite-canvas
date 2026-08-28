@@ -34,7 +34,7 @@ type AssetStore = {
     hydratedUserId: string;
     assets: Asset[];
     hydrateAssets: (userId: string, force?: boolean) => Promise<void>;
-    addAsset: (asset: AssetDraft) => string;
+    addAsset: (asset: AssetDraft) => Promise<string>;
     updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => void;
     removeAsset: (id: string) => void;
     replaceAssets: (assets: Asset[]) => void;
@@ -58,44 +58,59 @@ function normalizeAsset(record: assetApi.AssetRecord): Asset {
         id: record.id,
         ownerId: record.ownerId,
         scope: record.scope,
-        editable: record.ownerId === user?.id || (user?.role === "admin" && record.scope === "public"),
+        editable: Boolean(record.ownerId && record.ownerId === user?.id),
         title: record.title,
         coverUrl: stringMetadata(metadata, "coverUrl"),
-        tags: Array.isArray(metadata.tags) ? metadata.tags.filter((tag): tag is string => typeof tag === "string") : [],
-        source: stringMetadata(metadata, "source") || undefined,
-        note: stringMetadata(metadata, "note") || undefined,
+        tags: Array.isArray(metadata.tags) ? (metadata.tags as string[]) : [],
+        source: stringMetadata(metadata, "source"),
+        note: stringMetadata(metadata, "note"),
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
         metadata,
     };
-    if (record.type === "text") return { ...common, kind: "text", data: { content: record.content || "" } };
-    const url = record.mediaId ? mediaUrl(record.mediaId) : "";
+    if (record.type === "text") {
+        return {
+            ...common,
+            kind: "text",
+            coverUrl: "",
+            data: { content: record.content || "" },
+        };
+    }
+    const media = record.media;
+    const url = mediaUrl(media?.id || record.mediaId || "");
     return {
         ...common,
         kind: "image",
-        coverUrl: common.coverUrl || url,
+        coverUrl: url,
         data: {
             dataUrl: url,
-            storageKey: record.mediaId ? `image:${record.mediaId}` : undefined,
-            width: numberMetadata(metadata, "width"),
-            height: numberMetadata(metadata, "height"),
-            bytes: numberMetadata(metadata, "bytes"),
-            mimeType: stringMetadata(metadata, "mimeType") || "image/png",
+            storageKey: mediaId(media?.id || record.mediaId || ""),
+            width: media?.width || numberMetadata(metadata, "width"),
+            height: media?.height || numberMetadata(metadata, "height"),
+            bytes: media?.byteSize || numberMetadata(metadata, "bytes"),
+            mimeType: media?.mimeType || stringMetadata(metadata, "mimeType") || "image/png",
         },
     };
 }
 
-function assetInput(asset: AssetDraft | Asset) {
-    const metadata = { ...(asset.metadata || {}), tags: asset.tags, source: asset.source || "", note: asset.note || "", coverUrl: asset.coverUrl?.startsWith("data:") ? "" : asset.coverUrl || "" };
-    if (asset.kind === "text") return { scope: asset.scope || "private", type: "text" as const, title: asset.title, content: asset.data.content, mediaId: null, metadata };
-    if (asset.kind === "video") throw new Error("首版暂不支持视频素材");
+function assetInput(asset: AssetDraft): assetApi.CreateAssetInput {
+    const { kind, title, tags, source, note, data, metadata } = asset;
+    const commonMetadata = { ...metadata, ...(tags?.length ? { tags } : {}), ...(source ? { source } : {}), ...(note ? { note } : {}) };
+    if (kind === "text") {
+        return { scope: asset.scope || "private", type: "text", title, content: data.content, metadata: commonMetadata };
+    }
     return {
         scope: asset.scope || "private",
-        type: "image" as const,
-        title: asset.title,
-        content: null,
-        mediaId: asset.data.storageKey ? mediaId(asset.data.storageKey) : null,
-        metadata: { ...metadata, width: asset.data.width, height: asset.data.height, bytes: asset.data.bytes, mimeType: asset.data.mimeType },
+        type: "image",
+        title,
+        mediaId: mediaId(data.storageKey || data.dataUrl),
+        metadata: {
+            ...commonMetadata,
+            width: data.width,
+            height: data.height,
+            bytes: data.bytes,
+            mimeType: data.mimeType,
+        },
     };
 }
 
@@ -113,16 +128,19 @@ export const useAssetStore = create<AssetStore>()((set, get) => ({
         }
         await request;
     },
-    addAsset: (draft) => {
+    addAsset: async (draft) => {
         if (draft.kind === "video") return "";
         const temporaryId = `pending-${crypto.randomUUID()}`;
         const now = new Date().toISOString();
         set((state) => ({ assets: [{ ...draft, id: temporaryId, createdAt: now, updatedAt: now } as Asset, ...state.assets] }));
-        void assetApi
-            .createAsset(assetInput(draft))
-            .then((record) => set((state) => ({ assets: state.assets.map((asset) => (asset.id === temporaryId ? normalizeAsset(record) : asset)) })))
-            .catch(() => set((state) => ({ assets: state.assets.filter((asset) => asset.id !== temporaryId) })));
-        return temporaryId;
+        try {
+            const record = await assetApi.createAsset(assetInput(draft));
+            set((state) => ({ assets: state.assets.map((asset) => (asset.id === temporaryId ? normalizeAsset(record) : asset)) }));
+            return record.id;
+        } catch (error) {
+            set((state) => ({ assets: state.assets.filter((asset) => asset.id !== temporaryId) }));
+            throw error;
+        }
     },
     updateAsset: (id, patch) => {
         const current = get().assets.find((asset) => asset.id === id);

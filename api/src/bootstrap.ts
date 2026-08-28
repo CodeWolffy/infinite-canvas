@@ -1,15 +1,33 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { hashPassword } from "./auth/password.js";
 import { config } from "./config.js";
 import { db } from "./db/client.js";
-import { textRequests, users } from "./db/schema.js";
+import { requestLogs, textRequests, users } from "./db/schema.js";
 
 export async function recoverInterruptedTextRequests() {
   const finishedAt = new Date();
-  await db
+  const recovered = await db
     .update(textRequests)
     .set({ status: "failed", errorCode: "service_restart", finishedAt })
-    .where(eq(textRequests.status, "running"));
+    .where(eq(textRequests.status, "running"))
+    .returning({ id: textRequests.id });
+
+  if (recovered.length) {
+    await db
+      .update(requestLogs)
+      .set({
+        status: "failed",
+        errorCategory: "service_restart",
+        errorMessage: "服务重启，中断的文本请求已结束",
+        finishedAt,
+      })
+      .where(
+        and(
+          inArray(requestLogs.textRequestId, recovered.map((r) => r.id)),
+          eq(requestLogs.status, "running"),
+        ),
+      );
+  }
 }
 
 export async function bootstrapAdmin() {

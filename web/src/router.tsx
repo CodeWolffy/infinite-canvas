@@ -50,7 +50,7 @@ export const router = createBrowserRouter([
                 path: "/admin",
                 element: <AdminGuard><AdminLayout /></AdminGuard>,
                 children: [
-                    { index: true, element: <Navigate to="users" replace /> },
+                    { index: true, element: <Navigate to="stats" replace /> },
                     { path: "users", element: <AdminUsersPage /> },
                     { path: "models", element: <AdminModelsPage /> },
                     { path: "channels", element: <AdminChannelsPage /> },

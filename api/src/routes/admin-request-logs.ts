@@ -18,9 +18,12 @@ const querySchema = z.object({
 });
 
 export async function adminRequestLogRoutes(app: FastifyInstance) {
-  app.get("/", async (request, reply) => {
+  app.addHook("preHandler", async (request, reply) => {
     const admin = await authenticate(request, reply, { admin: true });
-    if (!admin) return;
+    if (!admin) return reply;
+  });
+
+  app.get("/", async (request, _reply) => {
     const query = querySchema.parse(request.query);
     const filters: SQL[] = [];
     if (query.from) filters.push(gte(requestLogs.startedAt, new Date(query.from)));

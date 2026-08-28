@@ -13,9 +13,12 @@ const querySchema = z.object({
 });
 
 export async function adminStatsRoutes(app: FastifyInstance) {
-  app.get("/", async (request, reply) => {
+  app.addHook("preHandler", async (request, reply) => {
     const admin = await authenticate(request, reply, { admin: true });
-    if (!admin) return;
+    if (!admin) return reply;
+  });
+
+  app.get("/", async (request, reply) => {
     const query = querySchema.parse(request.query);
     const toDate = query.to ? new Date(query.to) : new Date();
     const fromDate = query.from ? new Date(query.from) : new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -30,7 +33,7 @@ export async function adminStatsRoutes(app: FastifyInstance) {
     const channelTaskFilter = query.channelId
       ? sql`and exists (
           select 1 from generation_attempts fa
-          where fa.task_id = gt.id and fa.channel_id = ${query.channelId}
+          where fa.task_id = gt.id and fa.channel_id = ${query.channelId} and fa.status = 'succeeded'
         )`
       : sql``;
     const channelAttemptFilter = query.channelId ? sql`and a.channel_id = ${query.channelId}` : sql``;

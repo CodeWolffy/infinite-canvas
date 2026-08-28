@@ -37,9 +37,12 @@ function normalizeModelValues<T extends { pricePerImage?: string | number | null
 }
 
 export async function adminModelRoutes(app: FastifyInstance) {
-  app.get("/", async (request, reply) => {
+  app.addHook("preHandler", async (request, reply) => {
     const admin = await authenticate(request, reply, { admin: true });
-    if (!admin) return;
+    if (!admin) return reply;
+  });
+
+  app.get("/", async (_request, _reply) => {
     return { models: await db.select().from(models).where(isNull(models.deletedAt)).orderBy(asc(models.sortOrder), asc(models.displayName)) };
   });
 

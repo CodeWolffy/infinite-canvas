@@ -32,11 +32,10 @@ async function assertUsableMedia(mediaId: string | null | undefined, ownerIds: s
   const [media] = await db
     .selectDistinct({ id: mediaObjects.id })
     .from(mediaObjects)
-    .leftJoin(assets, eq(assets.mediaId, mediaObjects.id))
     .where(
       and(
         eq(mediaObjects.id, mediaId),
-        or(inArray(mediaObjects.ownerId, ownerIds), eq(assets.scope, "public"), inArray(assets.ownerId, ownerIds)),
+        inArray(mediaObjects.ownerId, ownerIds),
         eq(mediaObjects.status, "ready"),
       ),
     )

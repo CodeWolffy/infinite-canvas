@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { useTranslation } from "react-i18next";
+import { message } from "antd";
 
 import { requestEdit, requestGeneration, requestImageQuestion, type AiTextMessage } from "@/services/api/image";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
@@ -20,7 +21,6 @@ type PluginHostParams = {
     projectId: string;
     effectiveConfig: AiConfig;
     isAiConfigReady: (config: AiConfig, model: string) => boolean;
-    openConfigDialog: (open: boolean) => void;
     theme: CanvasTheme;
     nodesRef: MutableRefObject<CanvasNodeData[]>;
     connectionsRef: MutableRefObject<CanvasConnection[]>;
@@ -36,7 +36,7 @@ type PluginHostParams = {
  */
 export function usePluginHost(params: PluginHostParams) {
     const { t } = useTranslation();
-    const { projectId, effectiveConfig, isAiConfigReady, openConfigDialog, theme, nodesRef, connectionsRef, viewportRef, setNodes, setDialogNodeId, applyAgentOps } = params;
+    const { projectId, effectiveConfig, isAiConfigReady, theme, nodesRef, connectionsRef, viewportRef, setNodes, setDialogNodeId, applyAgentOps } = params;
 
     // Host capabilities available to plugin nodes; methods receive nodeId and are not bound to a specific node.
     const pluginAi = useMemo<CanvasPluginAi>(() => {
@@ -45,7 +45,7 @@ export function usePluginHost(params: PluginHostParams) {
         // Open the configuration dialog and throw when AI is not configured, allowing the plugin to handle the error.
         const ensureReady = (config: AiConfig) => {
             if (!isAiConfigReady(config, config.model)) {
-                openConfigDialog(true);
+                message.warning("平台模型渠道未就绪，请联系管理员配置渠道");
                 throw new Error(t("canvas.plugins.aiConfigRequired"));
             }
         };
@@ -79,7 +79,7 @@ export function usePluginHost(params: PluginHostParams) {
             listModels: (capability) => selectableModelsByCapability(effectiveConfig, capability as ModelCapability | undefined).map((value) => ({ value, label: decodeChannelModel(value)?.model || value })),
             defaultModel: (capability) => buildGenerationConfig(effectiveConfig, undefined, capability).model,
         };
-    }, [effectiveConfig, isAiConfigReady, openConfigDialog, projectId, t]);
+    }, [effectiveConfig, isAiConfigReady, projectId, t]);
 
     const pluginHost = useMemo<CanvasPluginHost>(
         () => ({

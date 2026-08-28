@@ -42,10 +42,7 @@ export async function syncCanvasMedia(tx: Transaction, projectId: string, userId
     .select({ mediaId: canvasProjectMedia.mediaId })
     .from(canvasProjectMedia)
     .where(eq(canvasProjectMedia.projectId, projectId));
-  const retainedIds = new Set(current.map((item) => item.mediaId));
-  const visibility = retainedIds.size
-    ? or(eq(mediaObjects.ownerId, userId), eq(assets.scope, "public"), eq(assets.ownerId, userId), inArray(mediaObjects.id, [...retainedIds]))
-    : or(eq(mediaObjects.ownerId, userId), eq(assets.scope, "public"), eq(assets.ownerId, userId));
+  const visibility = or(eq(mediaObjects.ownerId, userId), eq(assets.scope, "public"), eq(assets.ownerId, userId));
   const allowed = requestedIds.length
     ? await tx
         .selectDistinct({ id: mediaObjects.id })

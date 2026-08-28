@@ -166,16 +166,16 @@ async function processTask(taskId: string) {
 }
 
 export async function enqueueGenerationTask(taskId: string) {
-  await boss.send(queueName, { taskId }, { retryLimit: 0, singletonKey: taskId });
+  await boss.send(queueName, { taskId }, { retryLimit: 0, singletonKey: taskId, expireInSeconds: 3600 });
 }
 
 export async function startGenerationWorker() {
   await boss.start();
   const existingQueue = await boss.getQueue(queueName);
-  if (existingQueue && existingQueue.policy !== "short") {
-    await boss.updateQueue(queueName, { name: queueName, policy: "short" });
+  if (existingQueue && existingQueue.policy !== "standard") {
+    await boss.updateQueue(queueName, { name: queueName, policy: "standard" });
   }
-  await boss.createQueue(queueName, { name: queueName, policy: "short" });
+  await boss.createQueue(queueName, { name: queueName, policy: "standard" });
   const recovered = await db
     .update(generationTasks)
     .set({ status: "queued", startedAt: null, errorCode: null, errorMessage: null })

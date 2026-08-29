@@ -37,7 +37,7 @@ export default {
         model: { select: "选择模型", assign: "请先在渠道里为{{capability}}指定模型", noMatch: "暂无匹配的{{capability}}模型", addFirst: "请先到配置里添加渠道和模型", capabilities: { image: "生图", video: "视频", text: "文本", audio: "音频" } },
     },
     generation: { pending: ["正在创建图片", "马上就好了", "再等等", "正在整理细节"] },
-    imageReferences: { label: "图片{{index}}", separator: "、", promptPrefix: "参考图片编号：{{labels}}。请按这些编号理解提示词中的图片引用。\n\n{{prompt}}" },
+    imageReferences: { label: "图片{{index}}", promptLabel: "图片{{index}}（图{{index}} / Image {{index}}）", separator: "、", promptPrefix: "参考图片编号与别名：{{labels}}。请按这些编号与别名理解提示词中的图片引用。\n\n{{prompt}}" },
     modelPlugin: {
         pollTimeout: "插件轮询超时，请检查调用脚本或稍后重试", executionFailed: "模型调用脚本执行失败：{{message}}", noImages: "模型调用脚本没有返回图片",
         variables: { prompt: "用户输入的提示词（已拼接系统提示词）", images: "参考图，dataURL 数组（改图 / 图生视频时有值）", messages: "对话消息数组，含系统消息", params: "生成参数：生图 {size,quality,count}、视频 {seconds,size,resolution,ratio,generateAudio,watermark}、音频 {voice,format,speed,instructions}", model: "模型名称（不含渠道前缀）", baseUrl: "渠道接口地址（原样，未拼 /v1）", apiKey: "渠道 API Key，请求头里自己带上", systemPrompt: "系统提示词原文", reasoningEffort: "文本推理强度；auto 表示由脚本决定是否传递", http: "便捷请求：http.post(path, body, {headers,params,responseType})、http.get(path, opts)、http.url(path)；默认带 Authorization: Bearer apiKey，可用 headers 覆盖；path 相对时按 baseUrl 拼 /v1", request: "原始请求 request({ method, url, headers, params, data, responseType })，不加任何默认头，鉴权头自己写；url 相对时按 baseUrl 拼接（不加 /v1）", poll: "轮询 poll(request, extract, {intervalMs,timeoutMs})，extract 返回真值即结束", sleep: "sleep(ms) 延时", signal: "取消信号，可透传给 http/request", onDelta: "onDelta(text) 推送流式文本（文本模型）" },

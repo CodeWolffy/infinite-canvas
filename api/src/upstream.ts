@@ -210,7 +210,7 @@ export async function generateImage(
       form.set("n", "1");
       form.set("response_format", "b64_json");
       for (const reference of references) {
-        form.append("image[]", new Blob([new Uint8Array(reference.buffer)], { type: reference.mimeType }), reference.filename);
+        form.append("image", new Blob([new Uint8Array(reference.buffer)], { type: reference.mimeType }), reference.filename);
       }
       const response = await upstreamJson(candidate, endpoint(candidate.baseUrl, "images/edits"), {
         method: "POST",

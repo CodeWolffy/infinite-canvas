@@ -71,7 +71,12 @@ function getContextResourceNodes(nodeId: string, nodes: CanvasNodeData[], connec
     return connections
         .filter((connection) => connection.toNodeId === nodeId)
         .map((connection) => nodes.find((node) => node.id === connection.fromNodeId))
-        .filter((node): node is CanvasNodeData => Boolean(node && isResourceNode(node)));
+        .filter((node): node is CanvasNodeData => Boolean(node && isResourceNode(node)))
+        .sort((a, b) => {
+            const diffY = a.position.y - b.position.y;
+            if (Math.abs(diffY) > 8) return diffY;
+            return a.position.x - b.position.x;
+        });
 }
 
 function getConnectedConfigResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {

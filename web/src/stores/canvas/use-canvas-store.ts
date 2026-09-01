@@ -54,6 +54,7 @@ function normalizeProject(record: canvasApi.CanvasProjectRecord): CanvasProject 
 }
 
 function enqueueProjectUpdate(id: string, patch: { title?: string; snapshot?: CanvasSnapshot }) {
+    if (!useCanvasStore.getState().hydrated) return;
     pendingUpdates.set(id, { ...pendingUpdates.get(id), ...patch });
     const timer = saveTimers.get(id);
     if (timer) clearTimeout(timer);
@@ -68,6 +69,10 @@ async function flushProjectUpdate(id: string) {
     const timer = saveTimers.get(id);
     if (timer) clearTimeout(timer);
     saveTimers.delete(id);
+    if (!useCanvasStore.getState().hydrated) {
+        pendingUpdates.delete(id);
+        return;
+    }
     if (savingProjects.has(id)) return;
     const patch = pendingUpdates.get(id);
     if (!patch) return;
@@ -141,7 +146,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 set((state) => ({
                     projects: state.projects.map((item) => (item.id === id ? { ...item, title: nextTitle, updatedAt: new Date().toISOString() } : item)),
                 }));
-                enqueueProjectUpdate(id, { title: nextTitle });
+                if (get().hydrated) enqueueProjectUpdate(id, { title: nextTitle });
             },
             deleteProjects: async (ids) => {
                 ids.forEach((id) => deletingProjects.add(id));
@@ -165,7 +170,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                         return updated;
                     }),
                 }));
-                if (updated) enqueueProjectUpdate(id, { snapshot: projectSnapshot(updated) });
+                if (updated && get().hydrated) enqueueProjectUpdate(id, { snapshot: projectSnapshot(updated) });
             },
             flushProject: async (id) => flushProject(id),
 }));

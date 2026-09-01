@@ -143,6 +143,22 @@ export const canvasProjects = pgTable(
   (table) => [index("canvas_projects_user_updated_idx").on(table.userId, table.updatedAt)],
 );
 
+export const canvasProjectHistory = pgTable(
+  "canvas_project_history",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id").notNull().references(() => canvasProjects.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 200 }).notNull(),
+    snapshot: jsonb("snapshot").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("canvas_project_history_project_created_idx").on(table.projectId, table.createdAt),
+    index("canvas_project_history_user_idx").on(table.userId),
+  ],
+);
+
 export const mediaObjects = pgTable(
   "media_objects",
   {

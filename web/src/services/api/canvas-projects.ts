@@ -27,3 +27,20 @@ export async function updateCanvasProject(id: string, input: { title?: string; s
 export async function deleteCanvasProject(id: string) {
     await apiRequest<void>(`/api/canvas-projects/${id}`, { method: "DELETE" });
 }
+
+export type CanvasProjectHistoryRecord = {
+    id: string;
+    title: string;
+    createdAt: string;
+    nodeCount: number;
+    connectionCount: number;
+};
+
+export async function listCanvasProjectHistory(id: string) {
+    return (await apiRequest<{ history: CanvasProjectHistoryRecord[] }>(`/api/canvas-projects/${id}/history`)).history;
+}
+
+export async function restoreCanvasProjectHistory(id: string, historyId: string) {
+    return (await apiRequest<{ project: CanvasProjectRecord }>(`/api/canvas-projects/${id}/history/${historyId}/restore`, { method: "POST" })).project;
+}
+

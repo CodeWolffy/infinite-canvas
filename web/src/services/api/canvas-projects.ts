@@ -31,6 +31,7 @@ export async function deleteCanvasProject(id: string) {
 export type CanvasProjectHistoryRecord = {
     id: string;
     title: string;
+    note?: string | null;
     createdAt: string;
     nodeCount: number;
     connectionCount: number;
@@ -38,6 +39,10 @@ export type CanvasProjectHistoryRecord = {
 
 export async function listCanvasProjectHistory(id: string) {
     return (await apiRequest<{ history: CanvasProjectHistoryRecord[] }>(`/api/canvas-projects/${id}/history`)).history;
+}
+
+export async function createCanvasProjectSnapshot(id: string, note?: string) {
+    return (await apiRequest<{ history: CanvasProjectHistoryRecord }>(`/api/canvas-projects/${id}/history`, { method: "POST", body: { note } })).history;
 }
 
 export async function restoreCanvasProjectHistory(id: string, historyId: string) {

@@ -150,6 +150,7 @@ export const canvasProjectHistory = pgTable(
     projectId: uuid("project_id").notNull().references(() => canvasProjects.id, { onDelete: "cascade" }),
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     title: varchar("title", { length: 200 }).notNull(),
+    note: varchar("note", { length: 200 }),
     snapshot: jsonb("snapshot").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

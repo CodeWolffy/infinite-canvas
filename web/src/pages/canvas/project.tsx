@@ -70,6 +70,7 @@ import { getNodeDefinition, isBuiltinNodeType as isBuiltinType, useNodeRegistryV
 import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
 import { CanvasRefreshShell } from "@/components/canvas/canvas-refresh-shell";
 import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
+import { CanvasHistoryModal } from "@/components/canvas/canvas-history-modal";
 import { ConnectionCreateMenu, NodeCreateMenu, type PendingConnectionCreate } from "@/components/canvas/canvas-create-menus";
 import {
     CanvasNodeType,
@@ -249,6 +250,7 @@ function InfiniteCanvasPage() {
     const [titleEditing, setTitleEditing] = useState(false);
     const [titleDraft, setTitleDraft] = useState("");
     const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
+    const [historyModalOpen, setHistoryModalOpen] = useState(false);
     const [expandedImageNodeIds, setExpandedImageNodeIds] = useState<Set<string>>(new Set());
     const [isNodeDragging, setIsNodeDragging] = useState(false);
     const [isNodeResizing, setIsNodeResizing] = useState(false);
@@ -3000,6 +3002,7 @@ function InfiniteCanvasPage() {
                     onDeleteProject={deleteCurrentProject}
                     onExportProject={exportCurrentProject}
                     onImportImage={() => handleUploadRequest()}
+                    onOpenHistory={() => setHistoryModalOpen(true)}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                     agentOpen={agentPanelOpen}
@@ -3249,6 +3252,41 @@ function InfiniteCanvasPage() {
                 </Modal>
 
                 <AssetPickerModal open={assetPickerOpen} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
+
+                <CanvasHistoryModal
+                    projectId={projectId}
+                    open={historyModalOpen}
+                    onClose={() => setHistoryModalOpen(false)}
+                    onRestored={async (restoredRecord) => {
+                        const snapshot = restoredRecord.snapshot && typeof restoredRecord.snapshot === "object" ? (restoredRecord.snapshot as any) : {};
+                        const rawNodes = snapshot.nodes || [];
+                        const rawConnections = snapshot.connections || [];
+                        const rawSessions = snapshot.chatSessions || [];
+                        const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(rawNodes, rawConnections));
+                        const restoredSessions = await hydrateAssistantImages(rawSessions);
+
+                        setNodes(restoredNodes);
+                        setConnections(rawConnections);
+                        setChatSessions(restoredSessions);
+                        setActiveChatId(snapshot.activeChatId || null);
+                        setBackgroundMode(snapshot.backgroundMode || "lines");
+                        setShowImageInfo(snapshot.showImageInfo || false);
+                        if (snapshot.viewport) setViewport(snapshot.viewport);
+
+                        historyRef.current = { past: [], future: [] };
+                        setHistoryState({ canUndo: false, canRedo: false });
+
+                        updateProject(projectId, {
+                            nodes: restoredNodes,
+                            connections: rawConnections,
+                            chatSessions: restoredSessions,
+                            activeChatId: snapshot.activeChatId || null,
+                            backgroundMode: snapshot.backgroundMode || "lines",
+                            showImageInfo: snapshot.showImageInfo || false,
+                            viewport: snapshot.viewport || viewport,
+                        });
+                    }}
+                />
             </section>
         </main>
     );

@@ -128,6 +128,8 @@ export async function canvasProjectRoutes(app: FastifyInstance) {
     }
   });
 
+const createSnapshotBody = z.object({ note: z.string().trim().max(200).optional() });
+
   app.get("/:id/history", async (request, reply) => {
     const user = await authenticate(request, reply);
     if (!user) return;
@@ -136,6 +138,7 @@ export async function canvasProjectRoutes(app: FastifyInstance) {
       .select({
         id: canvasProjectHistory.id,
         title: canvasProjectHistory.title,
+        note: canvasProjectHistory.note,
         createdAt: canvasProjectHistory.createdAt,
         nodeCount: sql<number>`coalesce(jsonb_array_length((${canvasProjectHistory.snapshot}->'nodes')::jsonb), 0)::int`,
         connectionCount: sql<number>`coalesce(jsonb_array_length((${canvasProjectHistory.snapshot}->'connections')::jsonb), 0)::int`,
@@ -145,6 +148,30 @@ export async function canvasProjectRoutes(app: FastifyInstance) {
       .orderBy(desc(canvasProjectHistory.createdAt))
       .limit(MAX_HISTORY_PER_PROJECT);
     return { history };
+  });
+
+  app.post("/:id/history", async (request, reply) => {
+    const user = await authenticate(request, reply);
+    if (!user) return;
+    const { id } = paramsSchema.parse(request.params);
+    const body = createSnapshotBody.parse(request.body ?? {});
+    const [project] = await db
+      .select({ id: canvasProjects.id, title: canvasProjects.title, snapshot: canvasProjects.snapshot })
+      .from(canvasProjects)
+      .where(and(eq(canvasProjects.id, id), eq(canvasProjects.userId, user.id)))
+      .limit(1);
+    if (!project) return reply.code(404).send({ error: "not_found", message: "画布项目不存在" });
+    const [saved] = await db
+      .insert(canvasProjectHistory)
+      .values({
+        projectId: id,
+        userId: user.id,
+        title: project.title,
+        note: body.note?.trim() || null,
+        snapshot: project.snapshot,
+      })
+      .returning();
+    return reply.code(201).send({ history: saved });
   });
 
   app.post("/:id/history/:historyId/restore", async (request, reply) => {

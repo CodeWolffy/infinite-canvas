@@ -8,10 +8,26 @@ export async function savePreferences<T extends Record<string, unknown>>(prefere
     return (await apiRequest<{ preferences: T }>("/api/preferences", { method: "PUT", body: preferences })).preferences;
 }
 
+export type ChangelogEntry = {
+    date: string;
+    tag: string;
+    title: string;
+    body: string;
+};
+
+export type Announcement = {
+    title: string;
+    content: string;
+    entries: ChangelogEntry[];
+    publishedAt: string;
+};
+
+export type AnnouncementDraft = Omit<Announcement, "publishedAt">;
+
 export async function getAnnouncement() {
-    return (await apiRequest<{ content: string }>("/api/announcement")).content;
+    return (await apiRequest<{ announcement: Announcement }>("/api/announcement")).announcement;
 }
 
-export async function updateAnnouncement(content: string) {
-    return (await apiRequest<{ content: string }>("/api/admin/announcement", { method: "PUT", body: { content } })).content;
+export async function updateAnnouncement(draft: AnnouncementDraft) {
+    return (await apiRequest<{ announcement: Announcement }>("/api/admin/announcement", { method: "PUT", body: draft })).announcement;
 }

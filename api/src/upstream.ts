@@ -32,6 +32,35 @@ function closestGeminiAspectRatio(width: number, height: number) {
   });
 }
 
+/** Gemini only accepts the 1K/2K/4K tokens, so an explicit pixel size has to be mapped onto them. */
+function geminiImageSizeFromEdge(edge: number) {
+  if (edge <= 1536) return "1K";
+  if (edge <= 3072) return "2K";
+  return "4K";
+}
+
+/**
+ * Resolve generationConfig.imageConfig.imageSize. Quality wins when it is set, otherwise the
+ * requested pixel dimensions decide the tier — without this, an explicit 2048x2048 request would
+ * only carry its aspect ratio and Gemini would fall back to its 1K default.
+ */
+function resolveGeminiImageSize(quality: unknown, dimensions: { width: number; height: number } | null) {
+  const value = typeof quality === "string" ? quality.trim().toLowerCase() : "";
+  if (value === "low" || value === "standard" || value === "1k") return "1K";
+  if (value === "medium" || value === "hd" || value === "2k") return "2K";
+  if (value === "high" || value === "4k") return "4K";
+  return dimensions ? geminiImageSizeFromEdge(Math.max(dimensions.width, dimensions.height)) : undefined;
+}
+
+/**
+ * imageConfig.imageSize is only supported by the Gemini 3 image models; older ones reject it.
+ * Relay gateways often rename these, so the nano-banana aliases are matched too.
+ */
+function supportsGeminiImageSize(model: string) {
+  const value = model.toLowerCase();
+  return value.includes("gemini-3") || value.includes("3.1") || value.includes("3-pro") || value.includes("nano-banana");
+}
+
 function upstreamMessage(message: string) {
   try {
     const value = JSON.parse(message) as { error?: { message?: unknown } | unknown; message?: unknown };
@@ -234,19 +263,13 @@ export async function generateImage(
   const url = new URL(endpoint(candidate.baseUrl, `models/${encodeURIComponent(candidate.upstreamModel)}:generateContent`));
   if (candidate.apiKey) url.searchParams.set("key", candidate.apiKey);
   const { size, quality, background: _background, ...geminiParameters } = parameters;
-  const dimensions = typeof size === "string" ? size.match(/^(\d+)x(\d+)$/) : null;
-  const qualitySize =
-    typeof quality === "string"
-      ? quality.toLowerCase() === "low"
-        ? "512"
-        : quality.toLowerCase() === "medium"
-          ? "1K"
-          : quality.toLowerCase() === "high"
-            ? "2K"
-            : undefined
-      : undefined;
+  const match = typeof size === "string" ? size.match(/^(\d+)x(\d+)$/) : null;
+  const dimensions = match ? { width: Number(match[1]), height: Number(match[2]) } : null;
+  const qualitySize = supportsGeminiImageSize(candidate.upstreamModel)
+    ? resolveGeminiImageSize(quality, dimensions)
+    : undefined;
   const image = {
-    ...(dimensions ? { aspectRatio: closestGeminiAspectRatio(Number(dimensions[1]), Number(dimensions[2])) } : {}),
+    ...(dimensions ? { aspectRatio: closestGeminiAspectRatio(dimensions.width, dimensions.height) } : {}),
     ...(qualitySize ? { imageSize: qualitySize } : {}),
   };
   const response = await upstreamJson(candidate, url.toString(), {

@@ -6,17 +6,44 @@ import { db } from "../db/client.js";
 import { appSettings, models, userPreferences } from "../db/schema.js";
 
 const preferencesBody = z.record(z.string(), z.unknown());
-const announcementBody = z.object({ content: z.string().trim().max(500).default("") });
-const announcementKey = "announcement";
 
-async function readAnnouncement() {
+const changelogEntry = z.object({
+  date: z.string().trim().max(40).default(""),
+  tag: z.string().trim().max(20).default(""),
+  title: z.string().trim().max(120).default(""),
+  body: z.string().trim().max(1000).default(""),
+});
+
+const announcementBody = z.object({
+  title: z.string().trim().max(80).default(""),
+  content: z.string().trim().max(8000).default(""),
+  entries: z.array(changelogEntry).max(30).default([]),
+});
+
+const announcementKey = "announcement";
+export type ChangelogEntry = z.infer<typeof changelogEntry>;
+export type Announcement = z.infer<typeof announcementBody> & { publishedAt: string };
+
+const emptyAnnouncement: Announcement = { title: "", content: "", entries: [], publishedAt: "" };
+
+/**
+ * Older deployments stored a bare { content: string }; anything missing falls back to defaults so
+ * the endpoint keeps working without a migration.
+ */
+async function readAnnouncement(): Promise<Announcement> {
   const [row] = await db
-    .select({ value: appSettings.value })
+    .select({ value: appSettings.value, updatedAt: appSettings.updatedAt })
     .from(appSettings)
     .where(eq(appSettings.key, announcementKey))
     .limit(1);
-  const content = (row?.value as { content?: unknown } | undefined)?.content;
-  return typeof content === "string" ? content : "";
+  if (!row) return emptyAnnouncement;
+  const value = (row.value ?? {}) as Record<string, unknown>;
+  const parsed = announcementBody.safeParse(value);
+  const base = parsed.success ? parsed.data : { ...emptyAnnouncement, content: typeof value.content === "string" ? value.content : "" };
+  const publishedAt = typeof value.publishedAt === "string" && value.publishedAt
+    ? value.publishedAt
+    : (row.updatedAt instanceof Date ? row.updatedAt.toISOString() : new Date().toISOString());
+  return { ...base, publishedAt };
 }
 
 export async function modelRoutes(app: FastifyInstance) {
@@ -43,21 +70,26 @@ export async function preferenceRoutes(app: FastifyInstance) {
   app.get("/announcement", async (request, reply) => {
     const user = await authenticate(request, reply);
     if (!user) return;
-    return { content: await readAnnouncement() };
+    return { announcement: await readAnnouncement() };
   });
 
   app.put("/admin/announcement", async (request, reply) => {
     const admin = await authenticate(request, reply, { admin: true });
     if (!admin) return;
     const body = announcementBody.parse(request.body);
+    const previous = await readAnnouncement();
+    const changed = previous.title !== body.title || previous.content !== body.content || JSON.stringify(previous.entries) !== JSON.stringify(body.entries);
+    // Only bump publishedAt on a real edit, so re-saving unchanged copy does not re-alert everyone.
+    const publishedAt = changed || !previous.publishedAt ? new Date().toISOString() : previous.publishedAt;
+    const value = { ...body, publishedAt };
     await db
       .insert(appSettings)
-      .values({ key: announcementKey, value: { content: body.content } })
+      .values({ key: announcementKey, value })
       .onConflictDoUpdate({
         target: appSettings.key,
-        set: { value: { content: body.content }, updatedAt: new Date() },
+        set: { value, updatedAt: new Date() },
       });
-    return { content: body.content };
+    return { announcement: value };
   });
 
   app.get("/preferences", async (request, reply) => {

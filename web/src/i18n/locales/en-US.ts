@@ -336,6 +336,16 @@ export default {
         lightTheme: "Switch to light theme",
         darkTheme: "Switch to dark theme",
     },
+    announcement: {
+        open: "View announcements",
+        title: "Announcements",
+        noticeTab: "Notice",
+        changelogTab: "Changelog",
+        emptyNotice: "No announcements yet",
+        emptyChangelog: "No changelog entries yet",
+        mute: "Don't show this again",
+        confirm: "Got it",
+    },
     home: {
         promptError: "Failed to load prompts",
         description: "Generate, connect, and reshape <content>images, text, and graphics</content> in <canvas>Infinite Canvas</canvas>, turning one-off generations into a continuous creative process.",

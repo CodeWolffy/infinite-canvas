@@ -7,6 +7,7 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Media upload & generation byte size limit increase: Nginx, Fastify, and environment configuration increase default `MAX_UPLOAD_BYTES` and `MAX_GENERATED_BYTES` from 20MB to 50MB, allowing imports of high-resolution image assets over 20MB while returning structured errors upon limit violation.
 - NewAPI multi-image generation & canvas visual ordering fix: `/images/edits` upstream requests use standard repeated `image` form fields for compatibility with NewAPI/OneAPI gateways; canvas resource node collection stably sorts connected nodes by visual coordinates ($y$-axis ascending, then $x$-axis ascending); multi-image reference prompt prefix includes aliases (`图1`, `Image 1`) to eliminate model reference ambiguities.
 - Image Worker true concurrent consumption: refactored single worker loop with batchSize into N independent worker instances (matching configured concurrency), eliminating queue pull stalls when individual upstream requests take minutes.
 - Auth rate limiter memory cleanup: login & change-password sliding window limiter periodically sweeps expired records every 10m and evicts keys on capacity limits, eliminating memory leaks.

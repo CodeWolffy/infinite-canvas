@@ -18,6 +18,7 @@ const announcementBody = z.object({
   title: z.string().trim().max(80).default(""),
   content: z.string().trim().max(8000).default(""),
   entries: z.array(changelogEntry).max(30).default([]),
+  forceAlert: z.boolean().optional(),
 });
 
 const announcementKey = "announcement";
@@ -77,11 +78,12 @@ export async function preferenceRoutes(app: FastifyInstance) {
     const admin = await authenticate(request, reply, { admin: true });
     if (!admin) return;
     const body = announcementBody.parse(request.body);
+    const { forceAlert, ...data } = body;
     const previous = await readAnnouncement();
-    const changed = previous.title !== body.title || previous.content !== body.content || JSON.stringify(previous.entries) !== JSON.stringify(body.entries);
-    // Only bump publishedAt on a real edit, so re-saving unchanged copy does not re-alert everyone.
-    const publishedAt = changed || !previous.publishedAt ? new Date().toISOString() : previous.publishedAt;
-    const value = { ...body, publishedAt };
+    const changed = previous.title !== data.title || previous.content !== data.content || JSON.stringify(previous.entries) !== JSON.stringify(data.entries);
+    // Bump publishedAt on a real edit, explicit forceAlert, or when publishedAt is missing.
+    const publishedAt = changed || forceAlert || !previous.publishedAt ? new Date().toISOString() : previous.publishedAt;
+    const value = { ...data, publishedAt };
     await db
       .insert(appSettings)
       .values({ key: announcementKey, value })

@@ -22,7 +22,9 @@ export type Announcement = {
     publishedAt: string;
 };
 
-export type AnnouncementDraft = Omit<Announcement, "publishedAt">;
+export type AnnouncementDraft = Omit<Announcement, "publishedAt"> & {
+    forceAlert?: boolean;
+};
 
 export async function getAnnouncement() {
     return (await apiRequest<{ announcement: Announcement }>("/api/announcement")).announcement;
@@ -31,3 +33,4 @@ export async function getAnnouncement() {
 export async function updateAnnouncement(draft: AnnouncementDraft) {
     return (await apiRequest<{ announcement: Announcement }>("/api/admin/announcement", { method: "PUT", body: draft })).announcement;
 }
+

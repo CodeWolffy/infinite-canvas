@@ -39,6 +39,7 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
     const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
     const languageLabel = t("topNav.switchLanguage", { language: t(nextLocale === "zh-CN" ? "locale.zhCN" : "locale.enUS") });
     const [storageUsage, setStorageUsage] = useState("");
+
     const loadStorageUsage = (open: boolean) => {
         if (!open || storageUsage) return;
         void getMyStorageUsage()
@@ -67,6 +68,7 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
                         { key: "identity", disabled: true, label: <div className="min-w-32"><div className="truncate font-medium">{user?.displayName}</div><div className="truncate text-xs opacity-55">@{user?.username}</div></div> },
                         ...(storageUsage ? [{ key: "storage", disabled: true, label: <div className="min-w-32 text-xs opacity-55">我的占用：{storageUsage}</div> }] : []),
                         { type: "divider" as const },
+                        { key: "userCenter", icon: <CircleUserRound className="size-4" />, label: t("userCenter.title"), onClick: () => navigate("/user/generations") },
                         ...(user?.role === "admin" ? [{ key: "admin", icon: <ShieldCheck className="size-4" />, label: "平台管理", onClick: () => navigate("/admin/stats") }] : []),
                         { key: "logout", icon: <LogOut className="size-4" />, label: "退出登录", onClick: () => void logout().then(() => navigate("/login", { replace: true })) },
                     ],

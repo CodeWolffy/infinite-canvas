@@ -19,6 +19,7 @@ import { generationBatchRoutes } from "./routes/generation-batches.js";
 import { mediaRoutes } from "./routes/media.js";
 import { modelRoutes, preferenceRoutes } from "./routes/models.js";
 import { textRoutes } from "./routes/text.js";
+import { userCenterRoutes } from "./routes/user-center.js";
 
 export function buildApp() {
   const app = Fastify({
@@ -61,6 +62,7 @@ export function buildApp() {
   });
 
   app.register(authRoutes, { prefix: "/api/auth" });
+  app.register(userCenterRoutes, { prefix: "/api/user" });
   app.register(canvasProjectRoutes, { prefix: "/api/canvas-projects" });
   app.register(generationBatchRoutes, { prefix: "/api/generation-batches" });
   app.register(textRoutes, { prefix: "/api/text" });

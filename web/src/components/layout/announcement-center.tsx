@@ -31,7 +31,6 @@ export function AnnouncementCenter() {
     const [announcement, setAnnouncement] = useState<Announcement | null>(null);
     const [open, setOpen] = useState(false);
     const [seenAt, setSeenAt] = useState(readSeenAt);
-    const [muted, setMuted] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -53,31 +52,43 @@ export function AnnouncementCenter() {
         [announcement, seenAt],
     );
 
-    const close = useCallback(() => {
-        setOpen(false);
-        if (!muted || !announcement?.publishedAt) return;
+    const markSeen = useCallback(() => {
+        if (!announcement?.publishedAt) return;
         try {
             localStorage.setItem(SEEN_KEY, announcement.publishedAt);
         } catch {
             // A blocked localStorage only means the notice shows again next visit.
         }
         setSeenAt(announcement.publishedAt);
-    }, [announcement, muted]);
+    }, [announcement]);
+
+    const handleOpen = useCallback(() => {
+        setOpen(true);
+        markSeen();
+    }, [markSeen]);
+
+    const close = useCallback(() => {
+        setOpen(false);
+        markSeen();
+    }, [markSeen]);
 
     if (!announcement || !hasContent(announcement)) return null;
 
     const entries = announcement.entries.filter((entry) => entry.title.trim() || entry.body.trim());
+    const hasNotice = Boolean(announcement.content.trim());
+    const defaultTab = hasNotice ? "notice" : "changelog";
+
     const items = [
         {
             key: "notice",
             label: t("announcement.noticeTab"),
-            children: announcement.content.trim()
+            children: hasNotice
                 ? <MarkdownLite content={announcement.content} />
                 : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("announcement.emptyNotice")} />,
         },
         {
             key: "changelog",
-            label: t("announcement.changelogTab"),
+            label: `${t("announcement.changelogTab")}${entries.length ? ` (${entries.length})` : ""}`,
             children: entries.length ? (
                 <ol className="m-0 list-none space-y-4 p-0">
                     {entries.map((entry, index) => (
@@ -101,7 +112,7 @@ export function AnnouncementCenter() {
         <>
             <Tooltip title={t("announcement.open")}>
                 <Badge dot offset={[-4, 4]} count={unread ? 1 : 0}>
-                    <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" icon={<Bell className="size-4" />} onClick={() => setOpen(true)} aria-label={t("announcement.open")} />
+                    <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" icon={<Bell className="size-4" />} onClick={handleOpen} aria-label={t("announcement.open")} />
                 </Badge>
             </Tooltip>
             <Modal
@@ -112,15 +123,12 @@ export function AnnouncementCenter() {
                 centered
                 destroyOnHidden
                 footer={
-                    <div className="flex items-center justify-between gap-3">
-                        <Checkbox checked={muted} onChange={(event) => setMuted(event.target.checked)}>
-                            <span className="text-sm text-stone-500 dark:text-stone-400">{t("announcement.mute")}</span>
-                        </Checkbox>
+                    <div className="flex items-center justify-end">
                         <Button type="primary" onClick={close}>{t("announcement.confirm")}</Button>
                     </div>
                 }
             >
-                <Tabs items={items} size="small" className="[&_.ant-tabs-nav]:!mb-3" />
+                <Tabs defaultActiveKey={defaultTab} items={items} size="small" className="[&_.ant-tabs-nav]:!mb-3" />
             </Modal>
         </>
     );

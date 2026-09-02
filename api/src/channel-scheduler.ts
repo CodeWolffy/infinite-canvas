@@ -166,20 +166,33 @@ export async function withChannelSlot<T>(candidate: ChannelCandidate, action: ()
 
 export async function markChannelResult(candidate: ChannelCandidate, error?: UpstreamError) {
   const now = new Date();
+  if (!error) {
+    await db
+      .update(channels)
+      .set({ lastSuccessAt: now, lastErrorCode: null, cooldownUntil: null, updatedAt: now })
+      .where(eq(channels.id, candidate.channelId));
+    return;
+  }
+
+  const isAuthError = error.httpStatus === 401 || error.httpStatus === 403;
+  const isChannelFault =
+    error.category === "timeout" ||
+    error.category === "network" ||
+    error.category === "channel_busy" ||
+    error.httpStatus === 429 ||
+    (typeof error.httpStatus === "number" && error.httpStatus >= 500);
+
+  const cooldownMs = isAuthError ? 5 * 60 * 1000 : isChannelFault ? 2 * 60 * 1000 : 0;
+
   await db
     .update(channels)
-    .set(
-      error
-        ? {
-            lastFailureAt: now,
-            lastErrorCode: error.category,
-            ...(error.httpStatus === 401 || error.httpStatus === 403
-              ? { status: "needs_attention" as const, cooldownUntil: new Date(now.getTime() + 5 * 60 * 1000) }
-              : {}),
-            updatedAt: now,
-          }
-        : { lastSuccessAt: now, lastErrorCode: null, updatedAt: now },
-    )
+    .set({
+      lastFailureAt: now,
+      lastErrorCode: error.category,
+      ...(isAuthError ? { status: "needs_attention" as const } : {}),
+      ...(cooldownMs > 0 ? { cooldownUntil: new Date(now.getTime() + cooldownMs) } : {}),
+      updatedAt: now,
+    })
     .where(eq(channels.id, candidate.channelId));
 }
 

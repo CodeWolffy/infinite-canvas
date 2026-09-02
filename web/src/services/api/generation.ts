@@ -28,6 +28,7 @@ export type GenerationBatch = {
     requestedCount: number;
     parameters: Record<string, unknown>;
     createdAt: string;
+    retentionDays?: number;
 };
 
 export type GenerationTask = {
@@ -42,7 +43,7 @@ export type GenerationTask = {
     finishedAt: string | null;
     modelName: string | null;
     modelDisplayName: string | null;
-    image?: { mediaId: string; url: string; mimeType?: string; bytes?: number; width?: number | null; height?: number | null };
+    image?: { mediaId: string; url: string; mimeType?: string; bytes?: number; width?: number | null; height?: number | null; isSaved?: boolean };
 };
 
 export type GenerationBatchDetail = { batch: GenerationBatch; tasks: GenerationTask[]; referenceMediaIds: string[] };

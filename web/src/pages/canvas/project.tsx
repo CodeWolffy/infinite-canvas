@@ -2430,10 +2430,73 @@ function InfiniteCanvasPage() {
                             ),
                         );
                     };
+                    const applyTaskUpdate = (detail: { tasks: GenerationTask[] }) => {
+                        detail.tasks.forEach((task) => {
+                            const imageId = imageIdByTaskId.get(task.id);
+                            if (!imageId) return;
+                            if (task.status === "succeeded" && task.image) {
+                                const uploaded = {
+                                    url: task.image.url,
+                                    storageKey: `image:${task.image.mediaId}`,
+                                    width: task.image.width || 1,
+                                    height: task.image.height || 1,
+                                    bytes: task.image.bytes || 0,
+                                    mimeType: task.image.mimeType || "image/png",
+                                };
+                                const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
+                                const item: CanvasNodeImage = { id: imageId, status: NODE_STATUS_SUCCESS, content: uploaded.url, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType };
+                                setNodes((prev) =>
+                                    prev.map((node) => {
+                                        if (node.id !== rootId) return node;
+                                        const currentImage = node.metadata?.images?.find((img) => img.id === imageId);
+                                        if (currentImage?.status === NODE_STATUS_SUCCESS && currentImage.content === uploaded.url) return node;
+                                        const images = node.metadata?.images?.map((image) => (image.id === imageId ? item : image)) || [];
+                                        if (node.metadata?.primaryImageId) return { ...node, metadata: { ...node.metadata, images } };
+                                        const center = { x: node.position.x + node.width / 2, y: node.position.y + node.height / 2 };
+                                        return {
+                                            ...node,
+                                            position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
+                                            ...imageSize,
+                                            metadata: {
+                                                ...node.metadata,
+                                                content: item.content,
+                                                storageKey: item.storageKey,
+                                                naturalWidth: item.naturalWidth,
+                                                naturalHeight: item.naturalHeight,
+                                                bytes: item.bytes,
+                                                mimeType: item.mimeType,
+                                                images,
+                                                primaryImageId: imageId,
+                                            },
+                                        };
+                                    }),
+                                );
+                                hasSuccess = true;
+                                if (isConfigNode) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)));
+                            } else if (task.status === "failed" || task.status === "canceled") {
+                                const errorDetails = task.errorMessage || t("canvas.projectPage.generationFailed");
+                                setNodes((prev) =>
+                                    prev.map((node) =>
+                                        node.id === rootId
+                                            ? {
+                                                  ...node,
+                                                  metadata: {
+                                                      ...node.metadata,
+                                                      images: node.metadata?.images?.map((image) =>
+                                                          image.id === imageId ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image,
+                                                      ),
+                                                  },
+                                              }
+                                            : node,
+                                    ),
+                                );
+                            }
+                        });
+                    };
                     try {
                         const generatedImages = referenceImages.length
-                            ? await requestEdit({ ...generationConfig, count: String(count) }, effectivePrompt, referenceImages, { signal: controller.signal, canvasProjectId: projectId, onBatchCreated })
-                            : await requestGeneration({ ...generationConfig, count: String(count) }, effectivePrompt, { signal: controller.signal, canvasProjectId: projectId, onBatchCreated });
+                            ? await requestEdit({ ...generationConfig, count: String(count) }, effectivePrompt, referenceImages, { signal: controller.signal, canvasProjectId: projectId, onBatchCreated, onTasksUpdated: applyTaskUpdate })
+                            : await requestGeneration({ ...generationConfig, count: String(count) }, effectivePrompt, { signal: controller.signal, canvasProjectId: projectId, onBatchCreated, onTasksUpdated: applyTaskUpdate });
                         await Promise.all(
                             generatedImages.map(async (image) => {
                                 const imageId = imageIdByTaskId.get(image.id);

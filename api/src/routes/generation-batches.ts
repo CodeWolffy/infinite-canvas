@@ -30,7 +30,9 @@ const createBody = z.object({
   parameters: z.record(z.string(), z.unknown()).default({}),
 });
 
-function publicTask(task: typeof generationTasks.$inferSelect, media?: typeof mediaObjects.$inferSelect) {
+import { config } from "../config.js";
+
+function publicTask(task: typeof generationTasks.$inferSelect, media?: typeof mediaObjects.$inferSelect, isSaved?: boolean) {
   return {
     id: task.id,
     batchId: task.batchId,
@@ -51,6 +53,7 @@ function publicTask(task: typeof generationTasks.$inferSelect, media?: typeof me
         bytes: media.byteSize,
         width: media.width,
         height: media.height,
+        isSaved: Boolean(isSaved),
       },
     } : {}),
   };
@@ -65,6 +68,7 @@ function publicBatch(batch: typeof generationBatches.$inferSelect, summary?: Bat
     requestedCount: batch.requestedCount,
     parameters: batch.parameters,
     createdAt: batch.createdAt,
+    retentionDays: config.ORPHAN_MEDIA_GRACE_DAYS,
     ...(summary ? { summary } : {}),
   };
 }
@@ -245,10 +249,11 @@ export async function generationBatchRoutes(app: FastifyInstance) {
       .limit(1);
     if (!batch) return reply.code(404).send({ error: "not_found", message: "生成批次不存在" });
     const tasks = await db
-      .select({ task: generationTasks, media: mediaObjects })
+      .select({ task: generationTasks, media: mediaObjects, assetId: assets.id })
       .from(generationTasks)
       .leftJoin(generatedImages, eq(generatedImages.taskId, generationTasks.id))
       .leftJoin(mediaObjects, eq(mediaObjects.id, generatedImages.mediaId))
+      .leftJoin(assets, and(eq(assets.mediaId, mediaObjects.id), eq(assets.ownerId, user.id)))
       .where(eq(generationTasks.batchId, id))
       .orderBy(asc(generationTasks.sequence));
     const referenceMediaIds = await db
@@ -258,7 +263,7 @@ export async function generationBatchRoutes(app: FastifyInstance) {
       .orderBy(asc(generationBatchMedia.sequence));
     return {
       batch: publicBatch(batch),
-      tasks: tasks.map(({ task, media }) => publicTask(task, media ?? undefined)),
+      tasks: tasks.map(({ task, media, assetId }) => publicTask(task, media ?? undefined, Boolean(assetId))),
       referenceMediaIds: referenceMediaIds.map((item) => item.mediaId),
     };
   });

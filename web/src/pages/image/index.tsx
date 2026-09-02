@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Select, Tag, Tooltip, Typography } from "antd";
 import dayjs from "dayjs";
 import { saveAs } from "file-saver";
+import { useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
@@ -74,6 +75,8 @@ const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"])
 export default function ImagePage() {
     const { message, modal } = App.useApp();
     const { t } = useTranslation();
+    const location = useLocation();
+    const remixState = location.state as { prompt?: string; modelId?: string } | null;
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
     const config = useConfigStore((state) => state.config);
@@ -82,8 +85,8 @@ export default function ImagePage() {
     const addAsset = useAssetStore((state) => state.addAsset);
     const [models, setModels] = useState<PublicModel[]>([]);
     const modelsRef = useRef<PublicModel[]>([]);
-    const [modelId, setModelId] = useState("");
-    const [prompt, setPrompt] = useState("");
+    const [modelId, setModelId] = useState(remixState?.modelId || "");
+    const [prompt, setPrompt] = useState(remixState?.prompt || "");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
@@ -139,9 +142,10 @@ export default function ImagePage() {
                 if (typeof preferences[key] === "string") updateConfig(key, preferences[key]);
             }
             setLogs(batches.map((batch) => summaryToLog(batch, imageModels)));
-            const activeBatch = batches.find((batch) => batch.summary.activeCount > 0);
-            if (!activeBatch) return;
-            const applied = applyDetail(await getGenerationBatch(activeBatch.id));
+            const activeBatches = batches.filter((batch) => batch.summary.activeCount > 0);
+            if (!activeBatches.length) return;
+            setActiveBatchIds(activeBatches.map((b) => b.id));
+            const applied = applyDetail(await getGenerationBatch(activeBatches[0]!.id));
             setPreviewLog(applied.log);
             setResults(applied.results);
         }).catch((error) => message.error(error instanceof Error ? error.message : "生成记录加载失败"));
@@ -284,8 +288,6 @@ export default function ImagePage() {
             const detail = error instanceof Error ? error.message : t("workbench.generationFailed");
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: detail });
             message.error(detail);
-        } finally {
-            setRunning(false);
         }
     };
 

@@ -20,6 +20,12 @@ import LoginPage from "@/pages/login";
 import NotFound from "@/pages/not-found";
 import PromptsPage from "@/pages/prompts";
 
+import UserCenterLayout from "@/layouts/user-center-layout";
+import UserGenerationsPage from "@/pages/user/generations";
+import UserStatsPage from "@/pages/user/stats";
+import UserLogsPage from "@/pages/user/logs";
+import UserAccountPage from "@/pages/user/account";
+
 export const router = createBrowserRouter([
     { path: "/login", element: <LoginPage /> },
     {
@@ -44,6 +50,17 @@ export const router = createBrowserRouter([
                     { path: "/prompts", element: <PromptsPage /> },
                     { path: "/canvas", element: <CanvasPage /> },
                     { path: "/canvas/:id", element: <CanvasProjectPage /> },
+                ],
+            },
+            {
+                path: "/user",
+                element: <UserCenterLayout />,
+                children: [
+                    { index: true, element: <Navigate to="generations" replace /> },
+                    { path: "generations", element: <UserGenerationsPage /> },
+                    { path: "stats", element: <UserStatsPage /> },
+                    { path: "logs", element: <UserLogsPage /> },
+                    { path: "account", element: <UserAccountPage /> },
                 ],
             },
             {

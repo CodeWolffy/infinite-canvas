@@ -9,7 +9,7 @@ import { Fragment, type ReactNode } from "react";
  * --- dividers, **bold**, *italic*, `code`, and [text](url) links.
  */
 
-const INLINE_PATTERN = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\))/g;
+const INLINE_PATTERN = /(\*\*[^*\n]+\*\*|~~[^~\n]+~~|\*[^*\n]+\*|`[^`\n]+`|!\[[^\]\n]*\]\([^)\s]+\)|\[[^\]\n]+\]\([^)\s]+\))/g;
 const SAFE_LINK = /^(https?:\/\/|mailto:|\/)/i;
 
 function inlineNodes(text: string, keyPrefix: string): ReactNode[] {
@@ -21,11 +21,28 @@ function inlineNodes(text: string, keyPrefix: string): ReactNode[] {
             if (part.startsWith("**") && part.endsWith("**")) {
                 return <strong key={key} className="font-semibold text-stone-950 dark:text-stone-100">{part.slice(2, -2)}</strong>;
             }
+            if (part.startsWith("~~") && part.endsWith("~~")) {
+                return <del key={key} className="text-stone-400 line-through dark:text-stone-500">{part.slice(2, -2)}</del>;
+            }
             if (part.startsWith("`") && part.endsWith("`")) {
                 return <code key={key} className="rounded bg-stone-950/[0.06] px-1.5 py-0.5 font-mono text-[0.85em] text-stone-800 dark:bg-white/10 dark:text-stone-200">{part.slice(1, -1)}</code>;
             }
             if (part.startsWith("*") && part.endsWith("*")) {
                 return <em key={key}>{part.slice(1, -1)}</em>;
+            }
+            const imgMatch = part.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
+            if (imgMatch) {
+                const [, alt, src] = imgMatch;
+                if (!SAFE_LINK.test(src)) return <Fragment key={key}>{part}</Fragment>;
+                return (
+                    <img
+                        key={key}
+                        src={src}
+                        alt={alt}
+                        className="my-2 max-h-80 w-auto max-w-full rounded-lg border border-stone-200 object-contain dark:border-stone-800"
+                        loading="lazy"
+                    />
+                );
             }
             const link = part.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/);
             if (link) {
@@ -46,13 +63,38 @@ type Block =
     | { kind: "heading"; level: number; text: string }
     | { kind: "list"; ordered: boolean; items: string[] }
     | { kind: "quote"; lines: string[] }
+    | { kind: "code"; lang: string; code: string }
     | { kind: "divider" }
     | { kind: "paragraph"; lines: string[] };
 
 function parseBlocks(source: string): Block[] {
     const blocks: Block[] = [];
+    let inCodeBlock = false;
+    let codeLang = "";
+    let codeLines: string[] = [];
+
     for (const rawLine of source.replace(/\r\n?/g, "\n").split("\n")) {
         const line = rawLine.trimEnd();
+
+        if (line.startsWith("```")) {
+            if (inCodeBlock) {
+                blocks.push({ kind: "code", lang: codeLang, code: codeLines.join("\n") });
+                inCodeBlock = false;
+                codeLang = "";
+                codeLines = [];
+            } else {
+                inCodeBlock = true;
+                codeLang = line.slice(3).trim();
+                codeLines = [];
+            }
+            continue;
+        }
+
+        if (inCodeBlock) {
+            codeLines.push(rawLine);
+            continue;
+        }
+
         const previous = blocks.at(-1);
         if (!line.trim()) {
             // A blank line closes whatever block was open; the empty paragraph is dropped later.
@@ -86,6 +128,11 @@ function parseBlocks(source: string): Block[] {
         if (previous?.kind === "paragraph") previous.lines.push(line);
         else blocks.push({ kind: "paragraph", lines: [line] });
     }
+
+    if (inCodeBlock) {
+        blocks.push({ kind: "code", lang: codeLang, code: codeLines.join("\n") });
+    }
+
     return blocks.filter((block) => block.kind !== "paragraph" || block.lines.length > 0);
 }
 
@@ -112,6 +159,20 @@ export function MarkdownLite({ content, className = "" }: { content: string; cla
                             {block.lines.map((line, lineIndex) => (
                                 <p key={`${key}-${lineIndex}`} className="m-0">{inlineNodes(line, `${key}-${lineIndex}`)}</p>
                             ))}
+                        </div>
+                    );
+                }
+                if (block.kind === "code") {
+                    return (
+                        <div key={key} className="my-3 overflow-hidden rounded-lg border border-stone-200 bg-stone-900 text-stone-100 dark:border-stone-800 dark:bg-stone-950">
+                            {block.lang ? (
+                                <div className="border-b border-stone-800 bg-stone-950/60 px-3 py-1 font-mono text-[0.7rem] uppercase tracking-wider text-stone-400">
+                                    {block.lang}
+                                </div>
+                            ) : null}
+                            <pre className="overflow-x-auto p-3 font-mono text-xs leading-5 text-stone-200">
+                                <code>{block.code}</code>
+                            </pre>
                         </div>
                     );
                 }

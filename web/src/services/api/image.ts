@@ -105,6 +105,7 @@ type RequestOptions = {
     onTextRequestPrepared?: (requestId: string, conversationId: string) => void;
     onTextRequestSkipped?: () => void;
     onBatchCreated?: (detail: GenerationBatchDetail) => void;
+    onTasksUpdated?: (detail: GenerationBatchDetail) => void;
 };
 
 const QUALITY_BASE: Record<string, number> = {
@@ -842,21 +843,33 @@ async function requestPlatformImages(config: AiConfig, prompt: string, reference
     options?.onBatchCreated?.({ ...created, referenceMediaIds });
     const pollStartedAt = Date.now();
     let pollInterval = BATCH_POLL_BASE_MS;
+    let consecutiveNetworkErrors = 0;
     for (;;) {
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-        const detail = await getGenerationBatch(created.batch.id);
-        if (detail.tasks.every((task) => task.status !== "queued" && task.status !== "running")) {
-            const images = detail.tasks.flatMap((task) => (task.status === "succeeded" && task.image ? [{
-                id: task.id,
-                dataUrl: task.image.url,
-                storageKey: task.image.mediaId,
-                width: task.image.width || undefined,
-                height: task.image.height || undefined,
-                bytes: task.image.bytes || undefined,
-                mimeType: task.image.mimeType,
-            }] : []));
-            if (images.length) return images;
-            throw new Error(detail.tasks.find((task) => task.errorMessage)?.errorMessage || apiText("requestFailed"));
+        let detail: GenerationBatchDetail | undefined;
+        try {
+            detail = await getGenerationBatch(created.batch.id);
+            consecutiveNetworkErrors = 0;
+        } catch (error) {
+            if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+            consecutiveNetworkErrors += 1;
+            if (consecutiveNetworkErrors >= 20) throw error;
+        }
+        if (detail) {
+            options?.onTasksUpdated?.(detail);
+            if (detail.tasks.every((task) => task.status !== "queued" && task.status !== "running")) {
+                const images = detail.tasks.flatMap((task) => (task.status === "succeeded" && task.image ? [{
+                    id: task.id,
+                    dataUrl: task.image.url,
+                    storageKey: task.image.mediaId,
+                    width: task.image.width || undefined,
+                    height: task.image.height || undefined,
+                    bytes: task.image.bytes || undefined,
+                    mimeType: task.image.mimeType,
+                }] : []));
+                if (images.length) return images;
+                throw new Error(detail.tasks.find((task) => task.errorMessage)?.errorMessage || apiText("requestFailed"));
+            }
         }
         if (Date.now() - pollStartedAt > BATCH_MAX_WAIT_MS) {
             throw new Error("生成等待超时，任务仍在后台执行，请稍后在生成记录中查看结果");

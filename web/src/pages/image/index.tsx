@@ -284,6 +284,8 @@ export default function ImagePage() {
             const detail = error instanceof Error ? error.message : t("workbench.generationFailed");
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: detail });
             message.error(detail);
+        } finally {
+            setRunning(false);
         }
     };
 

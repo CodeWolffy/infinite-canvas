@@ -4,15 +4,18 @@ import { mediaUrl, readMedia, uploadMedia } from "@/services/api/media";
 
 export type UploadedImage = {
     url: string;
-    storageKey: string;
+    storageKey?: string;
     width: number;
     height: number;
     bytes: number;
     mimeType: string;
 };
 
-export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
-    const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
+type ImageReadOptions = { signal?: AbortSignal };
+
+export async function uploadImage(input: string | Blob, options?: ImageReadOptions): Promise<UploadedImage> {
+    if (options?.signal?.aborted) throw abortReason(options.signal);
+    const blob = typeof input === "string" ? await fetchImageBlob(input, options) : input;
     const previewUrl = URL.createObjectURL(blob);
     const meta = await readImageMeta(previewUrl);
     URL.revokeObjectURL(previewUrl);
@@ -22,6 +25,44 @@ export async function uploadImage(input: string | Blob): Promise<UploadedImage> 
     }
     const media = await uploadMedia(blob, input instanceof File ? input.name : `image.${meta.mimeType.split("/")[1] || "png"}`);
     return { url: media.url, storageKey: `image:${media.id}`, width: media.width || meta.width, height: media.height || meta.height, bytes: media.byteSize, mimeType: media.mimeType || meta.mimeType };
+}
+
+const IMAGE_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
+const IMAGE_RESPONSE_ERROR = "ImageResponseError";
+const IMAGE_TIMEOUT_ERROR = "ImageTimeoutError";
+
+async function fetchImageBlob(url: string, options?: ImageReadOptions) {
+    const controller = new AbortController();
+    let timedOut = false;
+    const abort = () => controller.abort();
+    if (options?.signal?.aborted) abort();
+    else options?.signal?.addEventListener("abort", abort, { once: true });
+    const timer = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, IMAGE_DOWNLOAD_TIMEOUT_MS);
+    try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) throw namedError(IMAGE_RESPONSE_ERROR);
+        return await response.blob();
+    } catch (error) {
+        if (timedOut) throw namedError(IMAGE_TIMEOUT_ERROR);
+        if (options?.signal?.aborted) throw abortReason(options.signal);
+        throw error;
+    } finally {
+        window.clearTimeout(timer);
+        options?.signal?.removeEventListener("abort", abort);
+    }
+}
+
+function namedError(name: string) {
+    const error = new Error(i18n.t("common.imageReadFailed"));
+    error.name = name;
+    return error;
+}
+
+function abortReason(signal: AbortSignal) {
+    return signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError");
 }
 
 export async function resolveImageUrl(storageKey?: string, fallback = "") {
@@ -36,10 +77,10 @@ export async function setImageBlob(_storageKey: string, blob: Blob) {
     return (await uploadImage(blob)).url;
 }
 
-export async function imageToDataUrl(image: { url?: string; dataUrl?: string; storageKey?: string }) {
+export async function imageToDataUrl(image: { url?: string; dataUrl?: string; storageKey?: string }, options?: ImageReadOptions) {
     const url = image.dataUrl && !image.dataUrl.startsWith("blob:") ? image.dataUrl : await resolveImageUrl(image.storageKey, image.url || "");
     if (!url || url.startsWith("data:")) return url;
-    return blobToDataUrl(await (await fetch(url)).blob());
+    return blobToDataUrl(await fetchImageBlob(url, options));
 }
 
 export async function deleteStoredImages(keys: Iterable<string>) {

@@ -1,8 +1,8 @@
 FROM node:22-bookworm-slim AS build
 
 WORKDIR /app
-COPY api/package.json ./
-RUN npm install
+COPY api/package.json api/package-lock.json ./
+RUN npm ci
 COPY api/tsconfig.json api/drizzle.config.ts ./
 COPY api/src ./src
 RUN npm run build

@@ -11,6 +11,7 @@ export type ChannelCandidate = {
   apiKey?: string;
   timeoutMs: number;
   maxConcurrency: number;
+  cooldownSeconds: number;
   upstreamModel: string;
   priority: number;
   weight: number;
@@ -61,6 +62,7 @@ export async function getChannelCandidates(modelId: string) {
       encryptedApiKey: channels.encryptedApiKey,
       timeoutMs: channels.timeoutMs,
       maxConcurrency: channels.maxConcurrency,
+      cooldownSeconds: channels.cooldownSeconds,
       upstreamModel: modelChannels.upstreamModel,
       priority: modelChannels.priority,
       weight: modelChannels.weight,
@@ -195,14 +197,19 @@ export async function markChannelResult(candidate: ChannelCandidate, error?: Ups
     error.httpStatus === 429 ||
     (typeof error.httpStatus === "number" && error.httpStatus >= 500);
 
-  const cooldownMs = isAuthError ? 5 * 60 * 1000 : isChannelFault ? 2 * 60 * 1000 : 0;
+  const configuredCooldownMs = Math.max(0, (candidate.cooldownSeconds ?? 120)) * 1000;
+  // 鉴权错误通常持续较长（如额度耗尽或密钥失效），保留至少 5 分钟或管理员配置的更长冷却期
+  const cooldownMs = isAuthError
+    ? Math.max(configuredCooldownMs, 300 * 1000)
+    : isChannelFault
+      ? configuredCooldownMs
+      : 0;
 
   await db
     .update(channels)
     .set({
       lastFailureAt: now,
       lastErrorCode: error.category,
-      ...(isAuthError ? { status: "needs_attention" as const } : {}),
       ...(cooldownMs > 0 ? { cooldownUntil: new Date(now.getTime() + cooldownMs) } : {}),
       updatedAt: now,
     })

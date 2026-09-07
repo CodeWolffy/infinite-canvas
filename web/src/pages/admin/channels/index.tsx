@@ -8,7 +8,7 @@ import { KeyRound, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Zap } fro
 import { useCopyText } from "@/hooks/use-copy-text";
 import { createAdminChannel, createAdminModel, deleteAdminChannel, fetchAdminChannelModels, getAdminChannels, getAdminModels, saveModelChannelBinding, updateAdminChannel, type AdminChannel, type ChannelInput } from "@/services/api/admin-platform";
 
-type ChannelValues = Omit<ChannelInput, "timeoutMs"> & { timeoutSeconds: number };
+type ChannelValues = Omit<ChannelInput, "timeoutMs"> & { timeoutSeconds: number; cooldownSeconds: number };
 type QuickModelValues = {
     targetModelId: string;
     name?: string;
@@ -64,15 +64,16 @@ export default function AdminChannelsPage() {
     useEffect(() => {
         if (editing === undefined) return;
         form.resetFields();
-        form.setFieldsValue(editing ? { name: editing.name, protocol: editing.protocol, baseUrl: editing.baseUrl, status: editing.status, timeoutSeconds: editing.timeoutMs / 1000, maxConcurrency: editing.maxConcurrency, apiKey: undefined } : { protocol: "openai", status: "disabled", timeoutSeconds: 480, maxConcurrency: 1 });
+        form.setFieldsValue(editing ? { name: editing.name, protocol: editing.protocol, baseUrl: editing.baseUrl, status: editing.status, timeoutSeconds: editing.timeoutMs / 1000, maxConcurrency: editing.maxConcurrency, cooldownSeconds: editing.cooldownSeconds ?? 120, apiKey: undefined } : { protocol: "openai", status: "disabled", timeoutSeconds: 480, maxConcurrency: 1, cooldownSeconds: 120 });
     }, [editing, form]);
 
     const columns: TableColumnsType<AdminChannel> = [
         { title: "渠道", key: "channel", width: 152, render: (_, channel) => <div><div className="font-medium text-stone-950 dark:text-stone-100">{channel.name}</div><div className="text-xs uppercase text-stone-500">{channel.protocol}</div></div> },
         { title: "接口地址", dataIndex: "baseUrl", width: 221, ellipsis: true, render: (value: string) => <span className="text-stone-500" title={value}>{value}</span> },
         { title: "密钥", key: "secret", width: 130, render: (_, channel) => channel.apiKeyConfigured ? <span className="inline-flex items-center gap-1.5 text-xs text-stone-500"><KeyRound className="size-3.5" />{channel.apiKeyHint || "已配置"}</span> : <Tag color="orange">未配置</Tag> },
-        { title: "并发", dataIndex: "maxConcurrency", width: 70 },
-        { title: "超时", dataIndex: "timeoutMs", width: 80, render: (value: number) => `${Math.round(value / 1000)}s` },
+        { title: "并发", dataIndex: "maxConcurrency", width: 65 },
+        { title: "超时", dataIndex: "timeoutMs", width: 75, render: (value: number) => `${Math.round(value / 1000)}s` },
+        { title: "故障冷却", dataIndex: "cooldownSeconds", width: 85, render: (value: number) => `${value ?? 120}s` },
         { title: "状态", dataIndex: "status", width: 140, render: (status: AdminChannel["status"], channel) => <Space size={4} wrap><Tag color={status === "active" ? "green" : status === "needs_attention" ? "red" : "default"}>{status === "active" ? "启用" : status === "needs_attention" ? "需检查" : "停用"}</Tag>{channel.cooldownUntil && new Date(channel.cooldownUntil) > new Date() ? <Tag color="orange">冷却中</Tag> : null}{channel.lastErrorCode && status !== "active" ? <Tooltip title={channel.lastErrorCode}><Tag color="red">异常</Tag></Tooltip> : null}</Space> },
         { title: "最近尝试", key: "health", width: 307, render: (_, channel) => {
             const attempt = channel.lastAttempt;
@@ -94,7 +95,7 @@ export default function AdminChannelsPage() {
 
     return (
         <div className="w-full px-6 py-6 lg:px-8 lg:py-8">
-            <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Provider routing</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">渠道管理</h1><p className="mt-1 text-sm text-stone-500">维护上游接口、密钥、超时和单渠道并发，密钥原值不会回显。</p></div><Button className="shrink-0" type="primary" icon={<Plus className="size-4" />} onClick={() => setEditing(null)}>创建渠道</Button></div>
+            <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Provider routing</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">渠道管理</h1><p className="mt-1 text-sm text-stone-500">维护上游接口、密钥、超时、单渠道并发和故障冷却期，密钥原值不会回显。</p></div><Button className="shrink-0" type="primary" icon={<Plus className="size-4" />} onClick={() => setEditing(null)}>创建渠道</Button></div>
             <div className="mt-6 overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800"><Table<AdminChannel> rowKey="id" columns={columns} dataSource={channelsQuery.data || []} loading={channelsQuery.isLoading} pagination={false} scroll={{ x: 1365 }} /></div>
             <Modal title={editing ? "编辑渠道" : "创建渠道"} open={editing !== undefined} footer={null} onCancel={() => setEditing(undefined)} destroyOnHidden>
                 <Form<ChannelValues> form={form} layout="vertical" requiredMark={false} className="pt-3" onFinish={(values) => saveMutation.mutate(values)}>
@@ -102,7 +103,11 @@ export default function AdminChannelsPage() {
                     <div className="grid grid-cols-2 gap-4"><Form.Item name="protocol" label="协议" rules={[{ required: true }]}><Select options={[{ value: "openai", label: "OpenAI 兼容" }, { value: "gemini", label: "Gemini" }]} /></Form.Item><Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "disabled", label: "停用" }, { value: "active", label: "启用" }, { value: "needs_attention", label: "需检查" }]} /></Form.Item></div>
                     <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: "请输入 Base URL" }, { type: "url", message: "请输入有效 URL" }]}><Input placeholder="https://api.example.com/v1" /></Form.Item>
                     <Form.Item name="apiKey" label={editing?.apiKeyConfigured ? "替换 API Key" : "API Key"} extra={editing?.apiKeyConfigured ? `当前密钥：${editing.apiKeyHint || "已配置"}。留空表示保持不变。` : "密钥只会提交到服务端加密保存，不会在页面回显。"}><Input.Password autoComplete="new-password" placeholder={editing?.apiKeyConfigured ? "留空则不替换" : "请输入 API Key（如上游需要）"} /></Form.Item>
-                    <div className="grid grid-cols-2 gap-4"><Form.Item name="timeoutSeconds" label="请求超时（秒）" rules={[{ required: true }]}><InputNumber className="w-full" min={1} max={600} precision={0} /></Form.Item><Form.Item name="maxConcurrency" label="最大并发" rules={[{ required: true }]}><InputNumber className="w-full" min={1} max={20} precision={0} /></Form.Item></div>
+                    <div className="grid grid-cols-3 gap-4">
+                        <Form.Item name="timeoutSeconds" label="超时（秒）" rules={[{ required: true }]}><InputNumber className="w-full" min={1} max={600} precision={0} /></Form.Item>
+                        <Form.Item name="maxConcurrency" label="最大并发" rules={[{ required: true }]}><InputNumber className="w-full" min={1} max={20} precision={0} /></Form.Item>
+                        <Form.Item name="cooldownSeconds" label="故障冷却（秒）" tooltip="遇到网络超时、5xx 或频控时渠道暂停调度的时长，0 表示不冷却" rules={[{ required: true }]}><InputNumber className="w-full" min={0} max={86400} precision={0} /></Form.Item>
+                    </div>
                     <Space className="flex justify-end"><Button onClick={() => setEditing(undefined)}>取消</Button><Button type="primary" htmlType="submit" loading={saveMutation.isPending}>保存</Button></Space>
                 </Form>
             </Modal>

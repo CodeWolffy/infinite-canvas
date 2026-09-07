@@ -152,6 +152,8 @@ export async function textRoutes(app: FastifyInstance) {
       .select({
         id: textRequests.id,
         status: textRequests.status,
+        conversationId: textRequests.conversationId,
+        requestMessageId: textRequests.requestMessageId,
         responseMessageId: textRequests.responseMessageId,
       })
       .from(textRequests)
@@ -177,7 +179,7 @@ export async function textRoutes(app: FastifyInstance) {
     const startedAt = new Date();
     try {
       const created = await db.transaction(async (tx) => {
-        let conversationId = body.conversationId;
+        let conversationId = existingRequest?.conversationId || body.conversationId;
         if (!conversationId) {
           const [conversation] = await tx
             .insert(conversations)
@@ -185,27 +187,44 @@ export async function textRoutes(app: FastifyInstance) {
             .returning({ id: conversations.id });
           conversationId = conversation!.id;
         }
-        const inserted = await tx
-          .insert(messages)
-          .values({ conversationId, role: "user", content: body.content, attachments: attachmentMediaIds })
-          .returning();
-        if (attachmentMediaIds.length) {
-          const claimed = await tx
-            .update(mediaObjects)
-            .set({ referenceCount: sql`${mediaObjects.referenceCount} + 1` })
-            .where(and(inArray(mediaObjects.id, attachmentMediaIds), eq(mediaObjects.status, "ready")))
-            .returning({ id: mediaObjects.id });
-          if (claimed.length !== attachmentMediaIds.length) throw new Error("MEDIA_UNAVAILABLE");
-          await tx.insert(messageMedia).values(
-            attachmentMediaIds.map((mediaId) => ({ messageId: inserted[0]!.id, mediaId })),
-          );
+
+        let requestMessage: typeof messages.$inferSelect | undefined;
+        if (existingRequest?.requestMessageId) {
+          const [found] = await tx
+            .select()
+            .from(messages)
+            .where(eq(messages.id, existingRequest.requestMessageId))
+            .limit(1);
+          if (found) {
+            requestMessage = found;
+          }
         }
+
+        if (!requestMessage) {
+          const inserted = await tx
+            .insert(messages)
+            .values({ conversationId, role: "user", content: body.content, attachments: attachmentMediaIds })
+            .returning();
+          requestMessage = inserted[0]!;
+          if (attachmentMediaIds.length) {
+            const claimed = await tx
+              .update(mediaObjects)
+              .set({ referenceCount: sql`${mediaObjects.referenceCount} + 1` })
+              .where(and(inArray(mediaObjects.id, attachmentMediaIds), eq(mediaObjects.status, "ready")))
+              .returning({ id: mediaObjects.id });
+            if (claimed.length !== attachmentMediaIds.length) throw new Error("MEDIA_UNAVAILABLE");
+            await tx.insert(messageMedia).values(
+              attachmentMediaIds.map((mediaId) => ({ messageId: requestMessage!.id, mediaId })),
+            );
+          }
+        }
+
         const [textRequest] = existingRequest
           ? await tx
               .update(textRequests)
               .set({
                 conversationId,
-                requestMessageId: inserted[0]!.id,
+                requestMessageId: requestMessage.id,
                 modelId: body.modelId,
                 status: "running",
                 errorCode: null,
@@ -221,16 +240,17 @@ export async function textRoutes(app: FastifyInstance) {
                 id: body.requestId,
                 userId: user.id,
                 conversationId,
-                requestMessageId: inserted[0]!.id,
+                requestMessageId: requestMessage.id,
                 modelId: body.modelId,
                 status: "running",
                 startedAt,
               })
               .returning();
-        return { conversationId, requestMessage: inserted[0]!, textRequest: textRequest! };
+        return { conversationId, requestMessage, textRequest: textRequest! };
       });
       const { conversationId, requestMessage, textRequest } = created;
 
+      let activeRequestLogId: string | undefined;
       try {
         const recentMessages = await db
           .select({ id: messages.id, role: messages.role, content: messages.content })
@@ -263,7 +283,7 @@ export async function textRoutes(app: FastifyInstance) {
           });
           try {
             const result = await generateText(channel, upstreamMessages, body.parameters);
-            await finishRequestLog(requestLogId);
+            activeRequestLogId = requestLogId;
             return result;
           } catch (error) {
             const upstream = error instanceof UpstreamError ? error : new UpstreamError("文本请求失败", "internal_error");
@@ -291,6 +311,7 @@ export async function textRoutes(app: FastifyInstance) {
           await tx.update(conversations).set({ updatedAt: finishedAt }).where(eq(conversations.id, conversationId));
           return response[0]!;
         });
+        await finishRequestLog(activeRequestLogId);
         return { conversationId, requestId: textRequest.id, message: responseMessage };
       } catch (error) {
         const upstream = error instanceof UpstreamError ? error : new UpstreamError("文本请求失败", "internal_error");
@@ -299,6 +320,9 @@ export async function textRoutes(app: FastifyInstance) {
           .update(textRequests)
           .set({ status: "failed", errorCode: upstream.category, durationMs: finishedAt.getTime() - startedAt.getTime(), finishedAt })
           .where(eq(textRequests.id, textRequest.id));
+        if (activeRequestLogId) {
+          await finishRequestLog(activeRequestLogId, upstream);
+        }
         return reply.code(502).send({ error: upstream.category, message: upstream.message, conversationId, requestId: textRequest.id });
       }
     } catch (error) {

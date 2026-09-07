@@ -16,6 +16,7 @@ const channelBody = z.object({
   status: z.enum(["active", "disabled", "needs_attention"]).default("disabled"),
   timeoutMs: z.number().int().min(1000).max(600000).default(480000),
   maxConcurrency: z.number().int().min(1).max(20).default(1),
+  cooldownSeconds: z.number().int().min(0).max(86400).default(120),
 });
 const updateChannelBody = channelBody.partial().refine((body) => Object.keys(body).length > 0);
 type ChannelInput = z.infer<typeof channelBody>;

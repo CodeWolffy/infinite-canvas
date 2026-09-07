@@ -107,6 +107,7 @@ export const channels = pgTable("channels", {
   status: channelStatus("status").notNull().default("disabled"),
   timeoutMs: integer("timeout_ms").notNull().default(480000),
   maxConcurrency: integer("max_concurrency").notNull().default(1),
+  cooldownSeconds: integer("cooldown_seconds").notNull().default(120),
   cooldownUntil: timestamp("cooldown_until", { withTimezone: true }),
   lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
   lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),

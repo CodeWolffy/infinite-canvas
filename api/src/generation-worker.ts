@@ -82,110 +82,135 @@ async function processTask(taskId: string) {
   });
   if (!claimed) return;
 
+  let activeRequestLogId: string | undefined;
+  let activeAttemptId: string | undefined;
   try {
     const references = await acquireReferences(task.batchId);
-    const [attemptState] = await db
-      .select({ maxAttempt: max(generationAttempts.attemptNumber) })
-      .from(generationAttempts)
-      .where(eq(generationAttempts.taskId, task.id));
-    const attemptOffset = attemptState?.maxAttempt ?? 0;
-    const generation = await runWithFailover(task.modelId, async (channel, attemptNumber) => {
-      const startedAt = new Date();
-      const [attempt] = await db
-        .insert(generationAttempts)
-        .values({
+    try {
+      const [attemptState] = await db
+        .select({ maxAttempt: max(generationAttempts.attemptNumber) })
+        .from(generationAttempts)
+        .where(eq(generationAttempts.taskId, task.id));
+      const attemptOffset = attemptState?.maxAttempt ?? 0;
+      const generation = await runWithFailover(task.modelId, async (channel, attemptNumber) => {
+        const startedAt = new Date();
+        const [attempt] = await db
+          .insert(generationAttempts)
+          .values({
+            taskId: task.id,
+            channelId: channel.channelId,
+            channelNameSnapshot: channel.channelName,
+            upstreamModel: channel.upstreamModel,
+            attemptNumber: attemptOffset + attemptNumber,
+          })
+          .returning();
+        const requestLogId = await startRequestLog({
+          userId: task.userId,
+          type: "image",
           taskId: task.id,
+          modelId: task.modelId,
+          modelNameSnapshot: task.modelNameSnapshot,
+          modelDisplayNameSnapshot: task.modelDisplayNameSnapshot,
           channelId: channel.channelId,
           channelNameSnapshot: channel.channelName,
           upstreamModel: channel.upstreamModel,
-          attemptNumber: attemptOffset + attemptNumber,
-        })
-        .returning();
-      const requestLogId = await startRequestLog({
-        userId: task.userId,
-        type: "image",
-        taskId: task.id,
-        modelId: task.modelId,
-        modelNameSnapshot: task.modelNameSnapshot,
-        modelDisplayNameSnapshot: task.modelDisplayNameSnapshot,
-        channelId: channel.channelId,
-        channelNameSnapshot: channel.channelName,
-        upstreamModel: channel.upstreamModel,
-      });
-      try {
-        const image = await generateImage(
-          channel,
-          task.prompt,
-          (task.parameters ?? {}) as Record<string, unknown>,
-          references,
-        );
-        const detected = await validateGeneratedImage(image);
-        const finishedAt = new Date();
-        await db
-          .update(generationAttempts)
-          .set({ status: "succeeded", finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime() })
-          .where(eq(generationAttempts.id, attempt!.id));
-        await finishRequestLog(requestLogId, undefined, task.priceSnapshot ?? "0");
-        return { image, detected };
-      } catch (error) {
-        const upstream = error instanceof UpstreamError ? error : new UpstreamError("上游请求失败", "unknown", undefined, "once");
-        const finishedAt = new Date();
-        await db
-          .update(generationAttempts)
-          .set({
-            status: "failed",
-            httpStatus: upstream.httpStatus,
-            errorCategory: upstream.category,
-            errorMessage: upstream.message,
-            finishedAt,
-            durationMs: finishedAt.getTime() - startedAt.getTime(),
-          })
-          .where(eq(generationAttempts.id, attempt!.id));
-        await finishRequestLog(requestLogId, upstream);
-        throw upstream;
-      }
-    }).finally(() => releaseReferences(task.batchId));
-    const { image, detected } = generation.result;
-    const dimensions = imageSize(image);
-    const objectKey = `generated/${task.userId}/${new Date().toISOString().slice(0, 7)}/${randomUUID()}.${detected.ext}`;
-    await minio.putObject(config.MINIO_BUCKET, objectKey, image, image.length, { "Content-Type": detected.mime });
-    try {
-      await db.transaction(async (tx) => {
-        const [media] = await tx
-          .insert(mediaObjects)
-          .values({
-            ownerId: task.userId,
-            bucket: config.MINIO_BUCKET,
-            objectKey,
-            originalName: `${task.id}.${detected.ext}`,
-            mimeType: detected.mime,
-            byteSize: image.length,
-            width: dimensions.width,
-            height: dimensions.height,
-            sha256: createHash("sha256").update(image).digest("hex"),
-            referenceCount: 1,
-          })
-          .returning();
-        await tx.insert(generatedImages).values({
-          taskId: task.id,
-          mediaId: media!.id,
-          billedAmount: task.priceSnapshot ?? "0",
         });
-        await tx
-          .update(generationTasks)
-          .set({ status: "succeeded", finishedAt: new Date() })
-          .where(eq(generationTasks.id, task.id));
+        try {
+          const image = await generateImage(
+            channel,
+            task.prompt,
+            (task.parameters ?? {}) as Record<string, unknown>,
+            references,
+          );
+          const detected = await validateGeneratedImage(image);
+          activeRequestLogId = requestLogId;
+          activeAttemptId = attempt!.id;
+          return { image, detected, startedAt };
+        } catch (error) {
+          const upstream = error instanceof UpstreamError ? error : new UpstreamError("上游请求失败", "unknown", undefined, "once");
+          const finishedAt = new Date();
+          await db
+            .update(generationAttempts)
+            .set({
+              status: "failed",
+              httpStatus: upstream.httpStatus,
+              errorCategory: upstream.category,
+              errorMessage: upstream.message,
+              finishedAt,
+              durationMs: finishedAt.getTime() - startedAt.getTime(),
+            })
+            .where(eq(generationAttempts.id, attempt!.id));
+          await finishRequestLog(requestLogId, upstream);
+          throw upstream;
+        }
       });
-    } catch (error) {
-      await minio.removeObject(config.MINIO_BUCKET, objectKey);
-      throw error;
+      const { image, detected, startedAt } = generation.result;
+      const dimensions = imageSize(image);
+      const objectKey = `generated/${task.userId}/${new Date().toISOString().slice(0, 7)}/${randomUUID()}.${detected.ext}`;
+      await minio.putObject(config.MINIO_BUCKET, objectKey, image, image.length, { "Content-Type": detected.mime });
+      try {
+        const finishedAt = new Date();
+        await db.transaction(async (tx) => {
+          const [media] = await tx
+            .insert(mediaObjects)
+            .values({
+              ownerId: task.userId,
+              bucket: config.MINIO_BUCKET,
+              objectKey,
+              originalName: `${task.id}.${detected.ext}`,
+              mimeType: detected.mime,
+              byteSize: image.length,
+              width: dimensions.width,
+              height: dimensions.height,
+              sha256: createHash("sha256").update(image).digest("hex"),
+              referenceCount: 1,
+            })
+            .returning();
+          await tx.insert(generatedImages).values({
+            taskId: task.id,
+            mediaId: media!.id,
+            billedAmount: task.priceSnapshot ?? "0",
+          });
+          if (activeAttemptId) {
+            await tx
+              .update(generationAttempts)
+              .set({ status: "succeeded", finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime() })
+              .where(eq(generationAttempts.id, activeAttemptId));
+          }
+          await tx
+            .update(generationTasks)
+            .set({ status: "succeeded", finishedAt })
+            .where(eq(generationTasks.id, task.id));
+        });
+        await finishRequestLog(activeRequestLogId, undefined, task.priceSnapshot ?? "0");
+      } catch (error) {
+        await minio.removeObject(config.MINIO_BUCKET, objectKey);
+        throw error;
+      }
+    } finally {
+      await releaseReferences(task.batchId);
     }
   } catch (error) {
     const upstream = error instanceof UpstreamError ? error : new UpstreamError("图片任务失败", "internal_error");
+    const finishedAt = new Date();
     await db
       .update(generationTasks)
-      .set({ status: "failed", errorCode: upstream.category, errorMessage: upstream.message, finishedAt: new Date() })
+      .set({ status: "failed", errorCode: upstream.category, errorMessage: upstream.message, finishedAt })
       .where(eq(generationTasks.id, task.id));
+    if (activeAttemptId) {
+      await db
+        .update(generationAttempts)
+        .set({
+          status: "failed",
+          errorCategory: upstream.category,
+          errorMessage: upstream.message,
+          finishedAt,
+        })
+        .where(and(eq(generationAttempts.id, activeAttemptId), eq(generationAttempts.status, "running")));
+    }
+    if (activeRequestLogId) {
+      await finishRequestLog(activeRequestLogId, upstream);
+    }
   }
 }
 

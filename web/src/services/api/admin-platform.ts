@@ -22,6 +22,7 @@ export type AdminChannel = {
     status: "active" | "disabled" | "needs_attention";
     timeoutMs: number;
     maxConcurrency: number;
+    cooldownSeconds: number;
     apiKeyConfigured: boolean;
     apiKeyHint: string | null;
     cooldownUntil: string | null;
@@ -56,7 +57,7 @@ export type ModelChannelBinding = {
 };
 
 export type ModelInput = Pick<AdminModel, "name" | "displayName" | "capability" | "status"> & { sortOrder?: number; pricePerImage?: string | number | null; description?: string | null; config?: Record<string, unknown> };
-export type ChannelInput = Pick<AdminChannel, "name" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency"> & { apiKey?: string };
+export type ChannelInput = Pick<AdminChannel, "name" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency"> & { cooldownSeconds?: number; apiKey?: string };
 export type BindingInput = Pick<ModelChannelBinding, "upstreamModel" | "priority" | "weight" | "enabled">;
 
 export async function getAdminModels() {

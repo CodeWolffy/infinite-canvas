@@ -63,6 +63,8 @@ class SimpleRateLimiter {
       this.records.set(key, { count: 1, resetAt: now + windowMs });
     } else {
       current.count += 1;
+      this.records.delete(key);
+      this.records.set(key, current);
     }
   }
 

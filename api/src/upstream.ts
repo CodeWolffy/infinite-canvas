@@ -297,6 +297,7 @@ export async function generateImage(
     const safeParameters = openAIParameters(parameters, ["model", "prompt", "n", "response_format", "image", "image[]"]);
     const headers = candidate.apiKey ? { Authorization: `Bearer ${candidate.apiKey}` } : undefined;
     if (references.length) {
+      const isGptImage = /^gpt-image/i.test(candidate.upstreamModel);
       const form = new FormData();
       for (const [key, value] of Object.entries(safeParameters)) {
         if (value !== undefined && value !== null) form.set(key, String(value));
@@ -304,7 +305,9 @@ export async function generateImage(
       form.set("model", candidate.upstreamModel);
       form.set("prompt", prompt);
       form.set("n", "1");
-      form.set("response_format", "b64_json");
+      if (!isGptImage) {
+        form.set("response_format", "b64_json");
+      }
       for (const reference of references) {
         form.append("image", new Blob([new Uint8Array(reference.buffer)], { type: reference.mimeType }), reference.filename);
       }
@@ -315,10 +318,17 @@ export async function generateImage(
       });
       return decodeImageResponse(response);
     }
+    const isGptImage = /^gpt-image/i.test(candidate.upstreamModel);
     const response = await upstreamJson(candidate, endpoint(candidate.baseUrl, "images/generations"), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify({ ...safeParameters, model: candidate.upstreamModel, prompt, n: 1, response_format: "b64_json" }),
+      body: JSON.stringify({
+        ...safeParameters,
+        model: candidate.upstreamModel,
+        prompt,
+        n: 1,
+        ...(isGptImage ? {} : { response_format: "b64_json" }),
+      }),
     });
     return decodeImageResponse(response);
   }

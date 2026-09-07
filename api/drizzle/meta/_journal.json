@@ -64,6 +64,13 @@
       "when": 1787984400000,
       "tag": "0008_perf_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788800000000,
+      "tag": "0009_channel_cooldown_seconds",
+      "breakpoints": true
     }
   ]
 }

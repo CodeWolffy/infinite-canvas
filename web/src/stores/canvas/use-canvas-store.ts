@@ -25,10 +25,16 @@ export type CanvasProject = {
 
 export type CanvasSaveError = { projectId: string; message: string; permanent: boolean };
 
+export type CanvasDeletedProject = {
+    id: string;
+    deletedAt: string;
+};
+
 type CanvasStore = {
     hydrated: boolean;
     hydratedUserId: string;
     projects: CanvasProject[];
+    deletedProjects?: CanvasDeletedProject[];
     saveError: CanvasSaveError | null;
     hydrateProjects: (userId: string) => Promise<void>;
     createProject: (title?: string) => Promise<string>;
@@ -37,7 +43,7 @@ type CanvasStore = {
     loadProjects: (ids: string[]) => Promise<CanvasProject[]>;
     renameProject: (id: string, title: string) => Promise<void>;
     deleteProjects: (ids: string[]) => Promise<void>;
-    replaceProjects: (projects: CanvasProject[]) => void;
+    replaceProjects: (projects: CanvasProject[], deletedProjects?: CanvasDeletedProject[]) => void;
     updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
     applyRestoredProject: (record: canvasApi.CanvasProjectDetail) => void;
     flushProject: (id: string) => Promise<void>;

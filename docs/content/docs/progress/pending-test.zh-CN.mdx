@@ -5,7 +5,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
-- 反向代理真实 IP 与登录限流：两个 Compose 文件都会把 `TRUST_PROXY`（默认 `true`）传给 API 容器，Nginx 反代后 API 应从 `X-Forwarded-For` 取到真实客户端 IP；用同一账号连续输错密码 5 次应触发按「IP + 用户名」的 1 分钟限流，同一 IP 跨多个用户名累计 30 次失败应触发 5 分钟限流，两者都返回 429 并带 `Retry-After`。若把 API 端口直接暴露到不受信网络，必须改回 `TRUST_PROXY=false`，否则客户端可伪造 `X-Forwarded-For` 绕过按 IP 限流。
+- 上游 v0.18.0 同步与对齐：多选节点虚线选区框选交互与一键打组 / 解散组；视频生成引入 `videoTaskId` 支持重新进入画布后的后台任务断点轮询恢复；生图设置按宽高比与 1K/2K/4K 规格对齐，Gemini 采用 `imageConfig` 协议生成；多图参考协议与本地代理转发整合。
+- 渠道故障冷却期与自动自愈：管理员可在「渠道管理」为每个渠道独立配置冷却时长 `cooldownSeconds`（0~86400 秒，默认 120 秒），调度器动态采用该配置进行熔断；401/403 异常冷却 5 分钟或按配置冷却后自动恢复调度探测，避免渠道永久失效。
 - 文本请求失败后重试：同一 `requestId` 的文本请求失败后再次提交，应原地复用该请求记录重新执行（状态回到运行中、清空错误码与响应关联），不再返回「数据已存在」冲突。
 - 本机 Docker 全链路：`docker compose -f docker-compose.local.yml build` 与 `up -d` 后四个服务应全部 healthy，`0007_canvas_project_history` 与 `0008_perf_indexes` 迁移自动生效（`canvas_project_history` 表与 `media_objects_orphan_idx`、`assets_updated_pagination_idx` 均已建立），登录、画布列表、素材分页与公告接口均返回 200。
 

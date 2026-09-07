@@ -13,10 +13,8 @@ import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audi
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { uploadImage } from "@/services/image-storage";
-<<<<<<< HEAD
-=======
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
->>>>>>> upstream/main
+
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
@@ -136,11 +134,9 @@ const NODE_STATUS_IDLE = "idle" as const;
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
-<<<<<<< HEAD
 const GENERATION_RECOVERY_MAX_WAIT_MS = 10 * 60 * 1000;
 const CANVAS_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const isSupportedCanvasImage = (file: File) => CANVAS_IMAGE_TYPES.has(file.type);
-=======
 
 function applyGeneratedVideo(item: CanvasNodeData, video: UploadedFile, extra: CanvasNodeData["metadata"] = {}): CanvasNodeData {
     const videoSize = fitNodeSize(video.width || item.width, video.height || item.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
@@ -153,7 +149,6 @@ function applyGeneratedVideo(item: CanvasNodeData, video: UploadedFile, extra: C
     };
 }
 
->>>>>>> upstream/main
 export default function CanvasPage() {
     const [mounted, setMounted] = useState(false);
 
@@ -212,6 +207,7 @@ function InfiniteCanvasPage() {
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
+    const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
     const hydrated = useCanvasStore((state) => state.hydrated);
@@ -296,13 +292,11 @@ function InfiniteCanvasPage() {
     const selectionBoxRef = useRef(selectionBox);
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
-<<<<<<< HEAD
     const restoringGenerationImagesRef = useRef(new Set<string>());
     const generationRecoveryStartedRef = useRef(new Map<string, number>());
     const missingTextRequestsRef = useRef(new Map<string, number>());
-=======
     const videoPollIdsRef = useRef(new Set<string>());
->>>>>>> upstream/main
+
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({

@@ -151,7 +151,9 @@ export function resetInterruptedGeneration(nodes: CanvasNodeData[], connections:
                 texts: node.metadata.texts?.map((text) => (text.status === "loading" ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text)),
             },
         };
+    });
 }
+
 
 
 export function isGenerationCanceled(error: unknown) {

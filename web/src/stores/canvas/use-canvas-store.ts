@@ -25,10 +25,16 @@ export type CanvasProject = {
 
 export type CanvasSaveError = { projectId: string; message: string; permanent: boolean };
 
+export type CanvasDeletedProject = {
+    id: string;
+    deletedAt: string;
+};
+
 type CanvasStore = {
     hydrated: boolean;
     hydratedUserId: string;
     projects: CanvasProject[];
+    deletedProjects: CanvasDeletedProject[];
     saveError: CanvasSaveError | null;
     hydrateProjects: (userId: string) => Promise<void>;
     createProject: (title?: string) => Promise<string>;
@@ -37,7 +43,7 @@ type CanvasStore = {
     loadProjects: (ids: string[]) => Promise<CanvasProject[]>;
     renameProject: (id: string, title: string) => Promise<void>;
     deleteProjects: (ids: string[]) => Promise<void>;
-    replaceProjects: (projects: CanvasProject[]) => void;
+    replaceProjects: (projects: CanvasProject[], deletedProjects?: CanvasDeletedProject[]) => void;
     updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
     applyRestoredProject: (record: canvasApi.CanvasProjectDetail) => void;
     flushProject: (id: string) => Promise<void>;
@@ -199,6 +205,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             hydrated: false,
             hydratedUserId: "",
             projects: [],
+            deletedProjects: [],
             saveError: null,
             hydrateProjects: async (userId) => {
                 if (get().hydrated && get().hydratedUserId === userId) return;
@@ -269,15 +276,18 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                     await Promise.all(ids.map((id) => savingProjects.get(id)).filter((request): request is Promise<void> => Boolean(request)));
                     ids.forEach(cancelProjectUpdate);
                     await Promise.all(ids.map(canvasApi.deleteCanvasProject));
+                    const now = new Date().toISOString();
+                    const removing = new Set(ids);
                     set((state) => ({
-                        projects: state.projects.filter((project) => !ids.includes(project.id)),
+                        projects: state.projects.filter((project) => !removing.has(project.id)),
+                        deletedProjects: [...state.deletedProjects.filter((item) => !removing.has(item.id)), ...ids.map((id) => ({ id, deletedAt: now }))],
                         saveError: state.saveError && ids.includes(state.saveError.projectId) ? null : state.saveError,
                     }));
                 } finally {
                     ids.forEach((id) => deletingProjects.delete(id));
                 }
             },
-            replaceProjects: (projects) => set({ projects }),
+            replaceProjects: (projects, deletedProjects = []) => set({ projects, deletedProjects }),
             updateProject: (id, patch) => {
                 // 快照没加载完就写回去会把服务端的真实内容覆盖成空画布。
                 if (!get().projects.find((project) => project.id === id)?.snapshotLoaded) return;

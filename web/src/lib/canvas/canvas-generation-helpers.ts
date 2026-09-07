@@ -105,12 +105,17 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
         vquality: node?.metadata?.vquality || config.vquality || defaultConfig.vquality,
         videoGenerateAudio: node?.metadata?.generateAudio || config.videoGenerateAudio || defaultConfig.videoGenerateAudio,
         videoWatermark: node?.metadata?.watermark || config.videoWatermark || defaultConfig.videoWatermark,
+        videoMode: node?.metadata?.videoMode || config.videoMode || defaultConfig.videoMode,
         audioVoice: node?.metadata?.audioVoice || config.audioVoice || defaultConfig.audioVoice,
         audioFormat: node?.metadata?.audioFormat || config.audioFormat || defaultConfig.audioFormat,
         audioSpeed: node?.metadata?.audioSpeed || config.audioSpeed || defaultConfig.audioSpeed,
         audioInstructions: node?.metadata?.audioInstructions || config.audioInstructions || defaultConfig.audioInstructions,
         count: String(node?.metadata?.count || (mode === "image" ? config.canvasImageCount || config.count : config.count) || defaultConfig.count),
     };
+}
+
+export function hasResumableVideoTask(node: CanvasNodeData) {
+    return node.type === CanvasNodeType.Video && Boolean(node.metadata?.videoTaskId) && !node.metadata?.content;
 }
 
 export function resetInterruptedGeneration(nodes: CanvasNodeData[], connections: CanvasConnection[] = []) {
@@ -120,28 +125,36 @@ export function resetInterruptedGeneration(nodes: CanvasNodeData[], connections:
             const target = nodes.find((node) => node.id === connection.toNodeId);
             const hasPendingText = target?.type === CanvasNodeType.Text && target.metadata?.status === "loading" && target.metadata.textRequestId;
             const hasPendingImages = target?.type === CanvasNodeType.Image && target.metadata?.images?.some((image) => image.status === "loading" && image.generationBatchId);
-            return source?.type === CanvasNodeType.Config && source.metadata?.status === "loading" && (hasPendingText || hasPendingImages) ? [source.id] : [];
+            const hasPendingVideo = target && hasResumableVideoTask(target);
+            return source?.type === CanvasNodeType.Config && source.metadata?.status === "loading" && (hasPendingText || hasPendingImages || hasPendingVideo) ? [source.id] : [];
         }),
     );
-    return nodes.map((node) =>
-        node.type === CanvasNodeType.Config && node.metadata?.status === "loading"
-            ? recoverableConfigIds.has(node.id)
+    return nodes.map((node) => {
+        if (node.metadata?.status !== "loading") return node;
+        if (hasResumableVideoTask(node)) return node;
+        if (node.type === CanvasNodeType.Config) {
+            return recoverableConfigIds.has(node.id)
                 ? node
-                : { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } }
-            : node.metadata?.status === "loading" && !(node.type === CanvasNodeType.Text && node.metadata.textRequestId) && (!node.metadata.images?.length || node.metadata.images.every((image) => image.status !== "loading" || !image.generationBatchId))
-            ? {
-                  ...node,
-                  metadata: {
-                      ...node.metadata,
-                      status: "error" as const,
-                      errorDetails: i18n.t("canvas.generation.interrupted"),
-                      images: node.metadata.images?.map((image) => (image.status === "loading" ? { ...image, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : image)),
-                      texts: node.metadata.texts?.map((text) => (text.status === "loading" ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text)),
-                  },
-              }
-            : node,
-    );
+                : { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } };
+        }
+        const hasPendingText = node.type === CanvasNodeType.Text && node.metadata.textRequestId;
+        const hasPendingImage = Boolean(node.metadata.images?.some((image) => image.status === "loading" && image.generationBatchId));
+        if (hasPendingText || hasPendingImage) return node;
+
+        return {
+            ...node,
+            metadata: {
+                ...node.metadata,
+                status: "error" as const,
+                errorDetails: i18n.t("canvas.generation.interrupted"),
+                images: node.metadata.images?.map((image) => (image.status === "loading" ? { ...image, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : image)),
+                texts: node.metadata.texts?.map((text) => (text.status === "loading" ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text)),
+            },
+        };
+    });
 }
+
+
 
 export function isGenerationCanceled(error: unknown) {
     return error instanceof Error && (error.message === i18n.t("common.requestCanceled") || error.name === "AbortError");

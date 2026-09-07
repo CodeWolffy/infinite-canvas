@@ -20,7 +20,9 @@ import { generateImage, readStreamWithLimit, validateGeneratedImage } from "./up
 const queueName = "generate-image";
 export const boss = new PgBoss({ connectionString: config.DATABASE_URL });
 
-async function loadReferences(batchId: string) {
+type ReferenceImage = { buffer: Buffer; mimeType: string; filename: string };
+
+async function loadReferences(batchId: string): Promise<ReferenceImage[]> {
   const rows = await db
     .select({ media: mediaObjects, sequence: generationBatchMedia.sequence })
     .from(generationBatchMedia)
@@ -41,6 +43,31 @@ async function loadReferences(batchId: string) {
   );
 }
 
+/**
+ * 同一批次的多个任务共用一份参考图：批次有 N 张图时原本会把同样的参考图从 MinIO 拉 N 次、
+ * 在内存里存 N 份。按 batchId 引用计数复用，最后一个任务用完即释放。
+ */
+const referenceCache = new Map<string, { promise: Promise<ReferenceImage[]>; users: number }>();
+
+function releaseReferences(batchId: string) {
+  const entry = referenceCache.get(batchId);
+  if (!entry) return;
+  entry.users -= 1;
+  if (entry.users <= 0) referenceCache.delete(batchId);
+}
+
+async function acquireReferences(batchId: string) {
+  const entry = referenceCache.get(batchId) ?? { promise: loadReferences(batchId), users: 0 };
+  entry.users += 1;
+  referenceCache.set(batchId, entry);
+  try {
+    return await entry.promise;
+  } catch (error) {
+    releaseReferences(batchId);
+    throw error;
+  }
+}
+
 async function processTask(taskId: string) {
   const [task] = await db.select().from(generationTasks).where(eq(generationTasks.id, taskId)).limit(1);
   if (!task || task.status !== "queued") return;
@@ -56,13 +83,13 @@ async function processTask(taskId: string) {
   if (!claimed) return;
 
   try {
-    const references = await loadReferences(task.batchId);
+    const references = await acquireReferences(task.batchId);
     const [attemptState] = await db
       .select({ maxAttempt: max(generationAttempts.attemptNumber) })
       .from(generationAttempts)
       .where(eq(generationAttempts.taskId, task.id));
     const attemptOffset = attemptState?.maxAttempt ?? 0;
-    const { result } = await runWithFailover(task.modelId, async (channel, attemptNumber) => {
+    const generation = await runWithFailover(task.modelId, async (channel, attemptNumber) => {
       const startedAt = new Date();
       const [attempt] = await db
         .insert(generationAttempts)
@@ -117,8 +144,8 @@ async function processTask(taskId: string) {
         await finishRequestLog(requestLogId, upstream);
         throw upstream;
       }
-    });
-    const { image, detected } = result;
+    }).finally(() => releaseReferences(task.batchId));
+    const { image, detected } = generation.result;
     const dimensions = imageSize(image);
     const objectKey = `generated/${task.userId}/${new Date().toISOString().slice(0, 7)}/${randomUUID()}.${detected.ext}`;
     await minio.putObject(config.MINIO_BUCKET, objectKey, image, image.length, { "Content-Type": detected.mime });

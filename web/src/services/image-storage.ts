@@ -4,7 +4,7 @@ import { mediaUrl, readMedia, uploadMedia } from "@/services/api/media";
 
 export type UploadedImage = {
     url: string;
-    storageKey?: string;
+    storageKey: string;
     width: number;
     height: number;
     bytes: number;

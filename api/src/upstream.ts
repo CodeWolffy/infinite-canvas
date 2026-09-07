@@ -1,3 +1,5 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { fileTypeFromBuffer } from "file-type";
 import type { ChannelCandidate } from "./channel-scheduler.js";
 import { UpstreamError } from "./channel-scheduler.js";
@@ -18,6 +20,25 @@ function decodeBase64Image(value: string) {
 
 function endpoint(baseUrl: string, path: string) {
   return `${baseUrl.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
+}
+
+function geminiEndpoint(baseUrl: string, path: string) {
+  let base = baseUrl.replace(/\/$/, "");
+  if (!base.includes("/v1beta") && !base.includes("/v1")) {
+    base = `${base}/v1beta`;
+  }
+  return `${base}/${path.replace(/^\//, "")}`;
+}
+
+function geminiHeaders(apiKey?: string): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (!apiKey) return headers;
+  headers["x-goog-api-key"] = apiKey;
+  // 针对 NewAPI / OneAPI 等中转站分配的 sk- 令牌，同时兼容 Authorization: Bearer 头
+  if (apiKey.startsWith("sk-")) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
+  return headers;
 }
 
 function openAIParameters(parameters: Record<string, unknown>, reserved: string[]) {
@@ -172,16 +193,62 @@ export async function readStreamWithLimit(
   }
 }
 
-export async function downloadImage(url: string) {
-  const target = new URL(url);
+/** 私网、回环、链路本地（含云元数据 169.254.169.254）、CGNAT 与组播地址一律视为不可下载。 */
+function isBlockedAddress(address: string) {
+  if (isIP(address) === 6) {
+    const value = address.toLowerCase();
+    const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) return isBlockedAddress(mapped[1]!);
+    if (value === "::" || value === "::1") return true;
+    const head = Number.parseInt(value.split(":")[0] || "0", 16);
+    return (head & 0xfe00) === 0xfc00 || (head & 0xffc0) === 0xfe80;
+  }
+  const parts = address.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
+  const [a, b] = parts as [number, number, number, number];
+  if (a === 0 || a === 10 || a === 127 || a >= 224) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  return false;
+}
+
+async function assertDownloadableTarget(target: URL) {
   if (target.protocol !== "https:" && target.protocol !== "http:") {
     throw new UpstreamError("生成图片地址协议不受支持", "invalid_image_url", undefined, "never");
   }
+  if (config.ALLOW_PRIVATE_IMAGE_HOSTS) return;
+  const hostname = target.hostname.replace(/^\[|\]$/g, "");
+  const addresses = isIP(hostname)
+    ? [hostname]
+    : (await lookup(hostname, { all: true }).catch(() => [])).map((item) => item.address);
+  if (!addresses.length || addresses.some(isBlockedAddress)) {
+    throw new UpstreamError("生成图片地址指向内网，已拒绝下载", "blocked_image_host", undefined, "never");
+  }
+}
+
+export async function downloadImage(url: string) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120000);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    // 手动跟随跳转并逐跳校验，避免 302 指向内网绕过主机检查。
+    let target = new URL(url);
+    let response: Response | undefined;
+    for (let hop = 0; hop < 4 && !response; hop += 1) {
+      await assertDownloadableTarget(target);
+      const hopResponse = await fetch(target, { signal: controller.signal, redirect: "manual" });
+      const location = hopResponse.status >= 300 && hopResponse.status < 400 ? hopResponse.headers.get("location") : null;
+      if (!location) {
+        response = hopResponse;
+        break;
+      }
+      await hopResponse.body?.cancel().catch(() => undefined);
+      target = new URL(location, target);
+    }
+    if (!response) throw new UpstreamError("生成图片跳转次数过多", "image_download", undefined, "once");
     if (!response.ok || !response.body) throw new UpstreamError("生成图片下载失败", "image_download", response.status, "once");
     const length = Number(response.headers.get("content-length") ?? 0);
     if (length > config.MAX_GENERATED_BYTES) throw new UpstreamError(`生成图片超过 ${maxGeneratedMb}MB`, "image_too_large", undefined, "never");
@@ -260,8 +327,7 @@ export async function generateImage(
   for (const reference of references) {
     parts.push({ inlineData: { mimeType: reference.mimeType, data: reference.buffer.toString("base64") } });
   }
-  const url = new URL(endpoint(candidate.baseUrl, `models/${encodeURIComponent(candidate.upstreamModel)}:generateContent`));
-  if (candidate.apiKey) url.searchParams.set("key", candidate.apiKey);
+  const url = new URL(geminiEndpoint(candidate.baseUrl, `models/${encodeURIComponent(candidate.upstreamModel)}:generateContent`));
   const { size, quality, background: _background, ...geminiParameters } = parameters;
   const match = typeof size === "string" ? size.match(/^(\d+)x(\d+)$/) : null;
   const dimensions = match ? { width: Number(match[1]), height: Number(match[2]) } : null;
@@ -274,7 +340,7 @@ export async function generateImage(
   };
   const response = await upstreamJson(candidate, url.toString(), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: geminiHeaders(candidate.apiKey),
     body: JSON.stringify({
       contents: [{ role: "user", parts }],
       generationConfig: {
@@ -340,11 +406,10 @@ export async function generateText(
         })),
       ],
     }));
-  const url = new URL(endpoint(candidate.baseUrl, `models/${encodeURIComponent(candidate.upstreamModel)}:generateContent`));
-  if (candidate.apiKey) url.searchParams.set("key", candidate.apiKey);
+  const url = new URL(geminiEndpoint(candidate.baseUrl, `models/${encodeURIComponent(candidate.upstreamModel)}:generateContent`));
   const value = (await upstreamJson(candidate, url.toString(), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: geminiHeaders(candidate.apiKey),
     body: JSON.stringify({
       contents,
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),

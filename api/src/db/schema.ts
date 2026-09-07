@@ -180,6 +180,10 @@ export const mediaObjects = pgTable(
   (table) => [
     uniqueIndex("media_objects_object_unique").on(table.bucket, table.objectKey),
     index("media_objects_owner_created_idx").on(table.ownerId, table.createdAt),
+    // 孤儿媒体清理的专用部分索引，避免每天全表扫描 media_objects。
+    index("media_objects_orphan_idx")
+      .on(table.createdAt)
+      .where(sql`${table.status} = 'ready' and ${table.referenceCount} = 0`),
   ],
 );
 
@@ -199,6 +203,8 @@ export const assets = pgTable(
   (table) => [
     index("assets_owner_scope_idx").on(table.ownerId, table.scope),
     index("assets_scope_created_idx").on(table.scope, table.createdAt),
+    // 素材列表的分页排序键，和 routes/assets.ts 的 order by 保持一致。
+    index("assets_updated_pagination_idx").on(table.updatedAt.desc(), table.id.desc()),
   ],
 );
 
@@ -266,6 +272,7 @@ export const generationTasks = pgTable(
     uniqueIndex("generation_tasks_batch_sequence_unique").on(table.batchId, table.sequence),
     index("generation_tasks_status_queued_idx").on(table.status, table.queuedAt),
     index("generation_tasks_user_finished_idx").on(table.userId, table.finishedAt),
+    index("generation_tasks_queued_at_idx").on(table.queuedAt),
   ],
 );
 

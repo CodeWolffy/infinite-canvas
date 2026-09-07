@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Bot, Download, History, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
+import { BookOpen, Bot, Download, History, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, TriangleAlert, Undo2, Upload } from "lucide-react";
 import { Button, Dropdown, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { DOCS_URL } from "@/constant/env";
 
@@ -137,6 +138,7 @@ export function CanvasTopBar({
                         )}
                     </div>
                     <CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} />
+                    <CanvasSaveStatus />
                 </div>
 
                 <div className="pointer-events-auto flex items-center gap-1.5">
@@ -182,6 +184,26 @@ function CompactAgentStatus({ status, onClick }: { status: { connected: boolean;
     const label = status.connected ? t("canvas.agentConnected") : status.enabled ? t("canvas.agentConnecting", { activity: status.activity || t("canvas.connecting") }) : t("canvas.agentDisconnected");
     const dotColor = status.connected ? "#22c55e" : status.enabled ? "#f59e0b" : theme.node.muted;
     return <button type="button" className="flex h-8 items-center gap-1.5 text-xs transition hover:opacity-75" style={{ color: status.connected ? "#16a34a" : status.enabled ? "#d97706" : theme.node.muted }} onClick={onClick} title={t("canvas.openAgent")}><span className="size-2 rounded-full" style={{ background: dotColor }} /><span className="max-w-[140px] truncate">{label}</span></button>;
+}
+
+function CanvasSaveStatus() {
+    const { t } = useTranslation();
+    const saveError = useCanvasStore((state) => state.saveError);
+    const retrySave = useCanvasStore((state) => state.retrySave);
+    if (!saveError) return null;
+    return (
+        <Tooltip title={t("canvas.save.retryTip", { message: saveError.message })}>
+            <button
+                type="button"
+                className="flex h-8 items-center gap-1.5 text-xs transition hover:opacity-75"
+                style={{ color: "#dc2626" }}
+                onClick={() => void retrySave(saveError.projectId)}
+            >
+                <TriangleAlert className="size-3.5" />
+                <span className="max-w-[160px] truncate">{saveError.permanent ? t("canvas.save.blocked") : t("canvas.save.retrying")}</span>
+            </button>
+        </Tooltip>
+    );
 }
 
 function Shortcut({ keys, value }: { keys: string[]; value: string }) {

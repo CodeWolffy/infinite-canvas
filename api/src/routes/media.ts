@@ -103,41 +103,39 @@ export async function mediaRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: "not_found", message: "文件不存在" });
     }
     if (media.ownerId !== user.id && user.role !== "admin") {
-      const [[assetReference], [canvasReference], [batchReference], [messageReference]] = await Promise.all([
-        db
-          .select({ id: assets.id })
-          .from(assets)
-          .where(and(eq(assets.mediaId, media.id), or(eq(assets.scope, "public"), eq(assets.ownerId, user.id))))
-          .limit(1),
-        db
-          .select({ id: canvasProjectMedia.projectId })
-          .from(canvasProjectMedia)
-          .innerJoin(canvasProjects, eq(canvasProjects.id, canvasProjectMedia.projectId))
-          .where(and(eq(canvasProjectMedia.mediaId, media.id), eq(canvasProjects.userId, user.id)))
-          .limit(1),
-        db
-          .select({ id: generationBatchMedia.batchId })
-          .from(generationBatchMedia)
-          .innerJoin(generationBatches, eq(generationBatches.id, generationBatchMedia.batchId))
-          .where(and(eq(generationBatchMedia.mediaId, media.id), eq(generationBatches.userId, user.id)))
-          .limit(1),
-        db
-          .select({ id: messageMedia.messageId })
-          .from(messageMedia)
-          .innerJoin(messages, eq(messages.id, messageMedia.messageId))
-          .innerJoin(conversations, eq(conversations.id, messages.conversationId))
-          .where(and(eq(messageMedia.mediaId, media.id), eq(conversations.userId, user.id)))
-          .limit(1),
-      ]);
-      if (!assetReference && !canvasReference && !batchReference && !messageReference) {
+      const rows = await db.execute(sql`
+        select 1 from assets where media_id = ${media.id}::uuid and (scope = 'public' or owner_id = ${user.id}::uuid)
+        union all
+        select 1 from canvas_project_media cpm
+          inner join canvas_projects cp on cp.id = cpm.project_id
+          where cpm.media_id = ${media.id}::uuid and cp.user_id = ${user.id}::uuid
+        union all
+        select 1 from generation_batch_media gbm
+          inner join generation_batches gb on gb.id = gbm.batch_id
+          where gbm.media_id = ${media.id}::uuid and gb.user_id = ${user.id}::uuid
+        union all
+        select 1 from message_media mm
+          inner join messages m on m.id = mm.message_id
+          inner join conversations c on c.id = m.conversation_id
+          where mm.media_id = ${media.id}::uuid and c.user_id = ${user.id}::uuid
+        limit 1
+      `);
+      if (!rows.length) {
         return reply.code(403).send({ error: "forbidden", message: "无权访问该文件" });
       }
+    }
+
+    const etag = `"${media.sha256}"`;
+    const ifNoneMatch = request.headers["if-none-match"];
+    if (ifNoneMatch === etag || ifNoneMatch === media.sha256) {
+      return reply.code(304).send();
     }
 
     const stream = await minio.getObject(media.bucket, media.objectKey);
     reply.header("Content-Type", media.mimeType);
     reply.header("Content-Length", String(media.byteSize));
-    reply.header("Cache-Control", "private, max-age=3600");
+    reply.header("ETag", etag);
+    reply.header("Cache-Control", "private, max-age=31536000, immutable");
     return reply.send(stream);
   });
 

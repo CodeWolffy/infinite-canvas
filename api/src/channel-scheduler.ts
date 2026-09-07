@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, lte, or } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { decryptSecret } from "./crypto.js";
 import { db } from "./db/client.js";
 import { channels, modelChannels } from "./db/schema.js";
@@ -101,6 +101,12 @@ export async function getChannelCandidates(modelId: string) {
     .flatMap(([, candidates]) => weightedShuffle(candidates));
 }
 
+/**
+ * 进程内渠道并发限流器。
+ * 注意：当前限流基于单实例内存 Map 控制。当 API 服务横向多实例扩容时，各实例独立计数，
+ * 总体并发上限将被实例数放大（例如 maxConcurrency=5，在 3 个副本下理论允许 15 并发）。
+ * 若业务后续对上游渠道有严格的全局频控要求，建议在反向代理层收敛流量或迁移至分布式锁（Postgres Advisory Lock / Redis）。
+ */
 class ChannelConcurrencyLimiter {
   private running = new Map<string, number>();
   private waiters = new Map<string, Array<() => void>>();
@@ -167,10 +173,17 @@ export async function withChannelSlot<T>(candidate: ChannelCandidate, action: ()
 export async function markChannelResult(candidate: ChannelCandidate, error?: UpstreamError) {
   const now = new Date();
   if (!error) {
+    // 仅在渠道先前处于异常（有错误码或处于冷却中）需要恢复时落盘更新，
+    // 避免高并发健康调用下所有 worker 在同一行 channels 上加排他行锁排队等待。
     await db
       .update(channels)
       .set({ lastSuccessAt: now, lastErrorCode: null, cooldownUntil: null, updatedAt: now })
-      .where(eq(channels.id, candidate.channelId));
+      .where(
+        and(
+          eq(channels.id, candidate.channelId),
+          or(isNotNull(channels.lastErrorCode), isNotNull(channels.cooldownUntil)),
+        ),
+      );
     return;
   }
 

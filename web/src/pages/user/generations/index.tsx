@@ -1,236 +1,81 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { App, Button, Card, Empty, Image, Input, Popconfirm, Select, Spin, Tag, Tooltip } from "antd";
 import { Clock, Copy, Download, FolderPlus, FolderSync, Info, RefreshCw, Search, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import { saveAs } from "file-saver";
 
 import { createZip } from "@/lib/zip";
 import { formatBytes } from "@/lib/image-utils";
+import { useCopyText } from "@/hooks/use-copy-text";
 import {
     deleteGenerationBatch,
     getGenerationBatch,
     listGenerationBatches,
-    type GenerationBatchDetail,
+    GENERATION_PAGE_SIZE,
     type GenerationBatchListItem,
 } from "@/services/api/generation";
 import { createAsset } from "@/services/api/assets";
+import { useAssetStore } from "@/stores/use-asset-store";
+
+/** 与服务端 ORPHAN_MEDIA_GRACE_DAYS 的默认值保持一致，接口没带 retentionDays 时用它兜底。 */
+const DEFAULT_RETENTION_DAYS = 45;
+const listKey = (offset: number) => ["user-generations", offset] as const;
+const detailKey = (id: string) => ["user-generation-batch", id] as const;
+
+function expirationDays(createdAt: string, retentionDays = DEFAULT_RETENTION_DAYS) {
+    const expiresAt = new Date(createdAt).getTime() + retentionDays * 24 * 60 * 60 * 1000;
+    return Math.ceil((expiresAt - Date.now()) / (24 * 60 * 60 * 1000));
+}
+
+function hasActiveTasks(batches: GenerationBatchListItem[]) {
+    return batches.some((batch) => (batch.summary?.activeCount ?? 0) > 0);
+}
+
+/** 批次内所有成功出图都已转存进素材库，才算「已永久保存」。 */
+function isBatchSaved(batch: GenerationBatchListItem) {
+    const summary = batch.summary;
+    return Boolean(summary && summary.succeededCount > 0 && summary.savedCount >= summary.succeededCount);
+}
 
 export default function UserGenerationsPage() {
     const { t } = useTranslation();
-    const navigate = useNavigate();
-    const { message } = App.useApp();
-    const [batches, setBatches] = useState<GenerationBatchListItem[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [batchDetails, setBatchDetails] = useState<Record<string, GenerationBatchDetail>>({});
-    const [loadingDetails, setLoadingDetails] = useState<Record<string, boolean>>({});
-    const [savingMedia, setSavingMedia] = useState<Record<string, boolean>>({});
-    const [savingBatch, setSavingBatch] = useState<Record<string, boolean>>({});
+    const [offset, setOffset] = useState(0);
     const [searchPrompt, setSearchPrompt] = useState("");
     const [statusFilter, setStatusFilter] = useState<"all" | "temporary" | "permanent" | "expiring">("all");
 
-    const loadBatches = useCallback(async () => {
-        setLoading(true);
-        try {
-            const data = await listGenerationBatches(50, 0);
-            setBatches(data);
-        } catch {
-            message.error("获取生图历史失败");
-        } finally {
-            setLoading(false);
-        }
-    }, [message]);
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: listKey(offset),
+        queryFn: () => listGenerationBatches(GENERATION_PAGE_SIZE, offset),
+        // 只在这一页还有排队/运行中的任务时轮询；标签页隐藏时 react-query 会自动暂停。
+        refetchInterval: (query) => (hasActiveTasks(query.state.data?.batches ?? []) ? 3000 : false),
+    });
 
-    useEffect(() => {
-        void loadBatches();
-    }, [loadBatches]);
-
-    useEffect(() => {
-        const hasActive = batches.some((b) => (b.summary?.activeCount ?? 0) > 0);
-        if (!hasActive) return;
-        const timer = setInterval(() => {
-            void listGenerationBatches(50, 0).then((data) => {
-                setBatches(data);
-                data.forEach((batch) => {
-                    if (batchDetails[batch.id]) {
-                        void getGenerationBatch(batch.id).then((detail) => {
-                            setBatchDetails((prev) => ({ ...prev, [batch.id]: detail }));
-                        }).catch(() => undefined);
-                    }
-                });
-            }).catch(() => undefined);
-        }, 3000);
-        return () => clearInterval(timer);
-    }, [batches, batchDetails]);
-
-    const loadDetail = async (batchId: string) => {
-        if (batchDetails[batchId] || loadingDetails[batchId]) return;
-        setLoadingDetails((prev) => ({ ...prev, [batchId]: true }));
-        try {
-            const detail = await getGenerationBatch(batchId);
-            setBatchDetails((prev) => ({ ...prev, [batchId]: detail }));
-        } catch {
-            // ignore
-        } finally {
-            setLoadingDetails((prev) => ({ ...prev, [batchId]: false }));
-        }
-    };
-
-    const handleDelete = async (batchId: string) => {
-        try {
-            await deleteGenerationBatch(batchId);
-            setBatches((prev) => prev.filter((b) => b.id !== batchId));
-            message.success("已删除该条生图记录");
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除失败");
-        }
-    };
-
-    const handleCopyPrompt = (prompt: string) => {
-        void navigator.clipboard.writeText(prompt);
-        message.success("提示词已复制");
-    };
-
-    const handleRemix = (batch: GenerationBatchListItem) => {
-        navigate("/image", {
-            state: {
-                prompt: batch.prompt,
-                modelId: batch.modelId,
-            },
-        });
-    };
-
-    const handleSaveToAsset = async (batchId: string, mediaId: string, prompt: string) => {
-        setSavingMedia((prev) => ({ ...prev, [mediaId]: true }));
-        try {
-            await createAsset({
-                type: "image",
-                mediaId,
-                title: prompt.slice(0, 40) || "生图素材",
-                scope: "private",
-            });
-            message.success(t("userCenter.savedSuccess"));
-            setBatchDetails((prev) => {
-                const detail = prev[batchId];
-                if (!detail) return prev;
-                return {
-                    ...prev,
-                    [batchId]: {
-                        ...detail,
-                        tasks: detail.tasks.map((task) =>
-                            task.image?.mediaId === mediaId
-                                ? { ...task, image: { ...task.image, isSaved: true } }
-                                : task,
-                        ),
-                    },
-                };
-            });
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "转存失败");
-        } finally {
-            setSavingMedia((prev) => ({ ...prev, [mediaId]: false }));
-        }
-    };
-
-    const handleSaveBatchToAssets = async (detail: GenerationBatchDetail) => {
-        const unsavedTasks = detail.tasks.filter((task) => task.image?.mediaId && !task.image.isSaved);
-        if (!unsavedTasks.length) {
-            message.info("该批次所有图片已保存在素材库中");
-            return;
-        }
-
-        const batchId = detail.batch.id;
-        setSavingBatch((prev) => ({ ...prev, [batchId]: true }));
-        try {
-            let successCount = 0;
-            await Promise.all(
-                unsavedTasks.map(async (task) => {
-                    const mediaId = task.image!.mediaId;
-                    try {
-                        await createAsset({
-                            type: "image",
-                            mediaId,
-                            title: detail.batch.prompt.slice(0, 40) || "生图素材",
-                            scope: "private",
-                        });
-                        successCount++;
-                    } catch {
-                        // ignore
-                    }
-                }),
-            );
-
-            message.success(t("userCenter.saveAllSuccess", { count: successCount }));
-            setBatchDetails((prev) => ({
-                ...prev,
-                [batchId]: {
-                    ...detail,
-                    tasks: detail.tasks.map((task) => ({
-                        ...task,
-                        image: task.image ? { ...task.image, isSaved: true } : undefined,
-                    })),
-                },
-            }));
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "整批转存失败");
-        } finally {
-            setSavingBatch((prev) => ({ ...prev, [batchId]: false }));
-        }
-    };
-
-    const handleDownloadAll = async (detail: GenerationBatchDetail) => {
-        const images = detail.tasks.flatMap((task) => (task.image?.url ? [{ url: task.image.url, name: `image_${task.sequence + 1}.png` }] : []));
-        if (!images.length) return;
-        try {
-            message.loading({ content: "正在打包下载...", key: "download-zip" });
-            const zipBlob = await createZip(images.map((img) => ({ url: img.url, filename: img.name })));
-            saveAs(zipBlob, `batch_${detail.batch.id.slice(0, 8)}.zip`);
-            message.success({ content: "打包下载完成", key: "download-zip" });
-        } catch {
-            message.error({ content: "打包下载失败", key: "download-zip" });
-        }
-    };
-
-    const calculateExpiration = (createdAt: string, retentionDays = 7) => {
-        const created = new Date(createdAt).getTime();
-        const expiresAt = created + retentionDays * 24 * 60 * 60 * 1000;
-        const remainingDays = Math.ceil((expiresAt - Date.now()) / (24 * 60 * 60 * 1000));
-        return { expiresAt, remainingDays };
-    };
-
+    const batches = data?.batches ?? [];
     const filteredBatches = useMemo(() => {
+        const keyword = searchPrompt.trim().toLowerCase();
         return batches.filter((batch) => {
-            if (searchPrompt.trim() && !batch.prompt.toLowerCase().includes(searchPrompt.trim().toLowerCase())) {
-                return false;
-            }
-            const { remainingDays } = calculateExpiration(batch.createdAt, batch.retentionDays || 7);
-            const isExpiring = remainingDays <= 3;
-            const detail = batchDetails[batch.id];
-            const isAllSaved = Boolean(detail && detail.tasks.length > 0 && detail.tasks.every((t) => t.image?.isSaved));
-
-            if (statusFilter === "expiring" && !isExpiring) return false;
-            if (statusFilter === "permanent" && !isAllSaved) return false;
-            if (statusFilter === "temporary" && isAllSaved) return false;
-
+            if (keyword && !batch.prompt.toLowerCase().includes(keyword)) return false;
+            if (statusFilter === "expiring") return expirationDays(batch.createdAt, batch.retentionDays) <= 3;
+            // 「已转存 / 未转存」直接用列表返回的 savedCount 判断，不必为每个批次再拉一次详情。
+            if (statusFilter === "permanent") return isBatchSaved(batch);
+            if (statusFilter === "temporary") return !isBatchSaved(batch);
             return true;
         });
-    }, [batches, batchDetails, searchPrompt, statusFilter]);
+    }, [batches, searchPrompt, statusFilter]);
 
     return (
         <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6 lg:p-8">
             <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
-                    <h2 className="m-0 text-xl font-semibold text-stone-950 dark:text-stone-100">
-                        {t("userCenter.generationsTitle")}
-                    </h2>
-                    <p className="mt-1 text-sm text-stone-500">
-                        {t("userCenter.generationsDesc")}
-                    </p>
+                    <h2 className="m-0 text-xl font-semibold text-stone-950 dark:text-stone-100">{t("userCenter.generationsTitle")}</h2>
+                    <p className="mt-1 text-sm text-stone-500">{t("userCenter.generationsDesc")}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                    <Button icon={<RefreshCw className="size-4" />} onClick={() => void loadBatches()} loading={loading}>
-                        刷新
+                    <Button icon={<RefreshCw className="size-4" />} onClick={() => void refetch()} loading={isFetching}>
+                        {t("common.refresh")}
                     </Button>
                     <Link to="/image">
                         <Button type="primary" icon={<Sparkles className="size-4" />}>
@@ -242,7 +87,7 @@ export default function UserGenerationsPage() {
 
             <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50/70 p-3.5 text-xs leading-5 text-sky-900 dark:border-sky-900/50 dark:bg-sky-950/30 dark:text-sky-200">
                 <Info className="size-4 shrink-0 text-sky-600 dark:text-sky-400" />
-                <span>{t("userCenter.retentionHint", { days: batches[0]?.retentionDays || 45 })}</span>
+                <span>{t("userCenter.retentionHint", { days: batches[0]?.retentionDays || DEFAULT_RETENTION_DAYS })}</span>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -250,7 +95,7 @@ export default function UserGenerationsPage() {
                     prefix={<Search className="size-4 text-stone-400" />}
                     placeholder={t("userCenter.searchPromptPlaceholder")}
                     value={searchPrompt}
-                    onChange={(e) => setSearchPrompt(e.target.value)}
+                    onChange={(event) => setSearchPrompt(event.target.value)}
                     allowClear
                     className="max-w-xs"
                 />
@@ -267,16 +112,12 @@ export default function UserGenerationsPage() {
                 />
             </div>
 
-            {loading && !batches.length ? (
+            {isLoading ? (
                 <div className="flex h-64 items-center justify-center">
                     <Spin size="large" />
                 </div>
             ) : !filteredBatches.length ? (
-                <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description={t("userCenter.emptyGenerations")}
-                    className="my-16"
-                >
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("userCenter.emptyGenerations")} className="my-16">
                     <Link to="/image">
                         <Button type="primary" icon={<Sparkles className="size-4" />}>
                             {t("userCenter.goToGenerate")}
@@ -285,198 +126,256 @@ export default function UserGenerationsPage() {
                 </Empty>
             ) : (
                 <div className="space-y-4">
-                    {filteredBatches.map((batch) => {
-                        const { remainingDays } = calculateExpiration(batch.createdAt, batch.retentionDays || 7);
-                        const detail = batchDetails[batch.id];
-                        const isLoadingDetail = loadingDetails[batch.id];
-                        const isExpired = remainingDays <= 0;
-                        const isAllSaved = Boolean(detail && detail.tasks.length > 0 && detail.tasks.every((t) => t.image?.isSaved));
-
-                        return (
-                            <Card
-                                key={batch.id}
-                                className="overflow-hidden border-stone-200 transition-shadow hover:shadow-sm dark:border-stone-800"
-                                bodyStyle={{ padding: "1rem" }}
-                            >
-                                <div className="flex flex-col gap-3">
-                                    <div className="flex flex-wrap items-start justify-between gap-2">
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <span className="font-mono text-xs text-stone-500">
-                                                {dayjs(batch.createdAt).format("YYYY-MM-DD HH:mm:ss")}
-                                            </span>
-                                            {isAllSaved ? (
-                                                <Tag color="success">{t("userCenter.savedPermanent")}</Tag>
-                                            ) : isExpired ? (
-                                                <Tag color="error">{t("userCenter.expiresToday")}</Tag>
-                                            ) : remainingDays <= 3 ? (
-                                                <Tag color="warning" icon={<Clock className="size-3" />}>
-                                                    {t("userCenter.expiresInDays", { days: remainingDays })}
-                                                </Tag>
-                                            ) : (
-                                                <Tag color="default" icon={<Clock className="size-3" />}>
-                                                    {t("userCenter.expiresInDays", { days: remainingDays })}
-                                                </Tag>
-                                            )}
-                                            {batch.summary && (
-                                                <span className="text-xs text-stone-500">
-                                                    共 {batch.summary.totalCount} 张 · 成功 {batch.summary.succeededCount}
-                                                </span>
-                                            )}
-                                        </div>
-                                        <div className="flex items-center gap-1.5">
-                                            <Tooltip title={t("userCenter.remixPrompt")}>
-                                                <Button
-                                                    size="small"
-                                                    type="text"
-                                                    className="text-purple-600 hover:text-purple-700 dark:text-purple-400"
-                                                    icon={<Wand2 className="size-3.5" />}
-                                                    onClick={() => handleRemix(batch)}
-                                                />
-                                            </Tooltip>
-                                            <Tooltip title="复制提示词">
-                                                <Button
-                                                    size="small"
-                                                    type="text"
-                                                    icon={<Copy className="size-3.5" />}
-                                                    onClick={() => handleCopyPrompt(batch.prompt)}
-                                                />
-                                            </Tooltip>
-                                            {detail && !isAllSaved && (
-                                                <Tooltip title={t("userCenter.saveAllToAsset")}>
-                                                    <Button
-                                                        size="small"
-                                                        type="text"
-                                                        className="text-amber-600 hover:text-amber-700 dark:text-amber-400"
-                                                        icon={<FolderSync className="size-3.5" />}
-                                                        loading={savingBatch[batch.id]}
-                                                        onClick={() => void handleSaveBatchToAssets(detail)}
-                                                    />
-                                                </Tooltip>
-                                            )}
-                                            {detail && (
-                                                <Tooltip title="下载全部图片">
-                                                    <Button
-                                                        size="small"
-                                                        type="text"
-                                                        icon={<Download className="size-3.5" />}
-                                                        onClick={() => void handleDownloadAll(detail)}
-                                                    />
-                                                </Tooltip>
-                                            )}
-                                            <Popconfirm
-                                                title={t("userCenter.deleteBatchConfirm")}
-                                                description={t("userCenter.deleteBatchDesc")}
-                                                onConfirm={() => void handleDelete(batch.id)}
-                                                okText="删除"
-                                                cancelText="取消"
-                                                okButtonProps={{ danger: true }}
-                                            >
-                                                <Button size="small" type="text" danger icon={<Trash2 className="size-3.5" />} />
-                                            </Popconfirm>
-                                        </div>
-                                    </div>
-
-                                    <div className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-stone-800 dark:bg-stone-900/60 dark:text-stone-200">
-                                        <span className="font-medium">{batch.prompt}</span>
-                                    </div>
-
-                                    {!detail ? (
-                                        <div className="flex items-center justify-between pt-1">
-                                            <div className="flex items-center gap-2 overflow-hidden">
-                                                {batch.summary?.thumbnailMediaIds.map((mediaId) => (
-                                                    <img
-                                                        key={mediaId}
-                                                        src={`/api/media/${mediaId}`}
-                                                        alt="Thumbnail"
-                                                        className="size-12 rounded-lg border border-stone-200 object-cover dark:border-stone-800"
-                                                        loading="lazy"
-                                                    />
-                                                ))}
-                                            </div>
-                                            <Button
-                                                size="small"
-                                                onClick={() => void loadDetail(batch.id)}
-                                                loading={isLoadingDetail}
-                                            >
-                                                查看详情
-                                            </Button>
-                                        </div>
-                                    ) : (
-                                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 pt-2">
-                                            {detail.tasks.map((task) => (
-                                                <div
-                                                    key={task.id}
-                                                    className="group relative flex flex-col overflow-hidden rounded-xl border border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-900/40"
-                                                >
-                                                    {task.image?.url ? (
-                                                        <div className="relative aspect-square w-full overflow-hidden bg-stone-100 dark:bg-stone-950">
-                                                            <Image
-                                                                src={task.image.url}
-                                                                alt={batch.prompt}
-                                                                className="h-full w-full object-cover"
-                                                                preview={{ mask: "点击放大预览" }}
-                                                            />
-                                                            <div className="absolute top-2 right-2 z-10">
-                                                                {task.image.isSaved ? (
-                                                                    <Tag color="success" className="!m-0">
-                                                                        {t("userCenter.savedPermanent")}
-                                                                    </Tag>
-                                                                ) : null}
-                                                            </div>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="flex aspect-square w-full items-center justify-center p-3 text-center text-xs text-stone-400">
-                                                            {task.status === "failed" ? (
-                                                                <span className="text-red-500">生成失败: {task.errorMessage || "未知错误"}</span>
-                                                            ) : (
-                                                                <span>{t(`userCenter.task${task.status.charAt(0).toUpperCase() + task.status.slice(1)}`)}</span>
-                                                            )}
-                                                        </div>
-                                                    )}
-
-                                                    {task.image?.mediaId && (
-                                                        <div className="flex items-center justify-between border-t border-stone-200 p-2 text-xs dark:border-stone-800">
-                                                            <span className="font-mono text-stone-400">
-                                                                {task.image.bytes ? formatBytes(task.image.bytes) : ""}
-                                                            </span>
-                                                            <div className="flex items-center gap-1">
-                                                                {!task.image.isSaved ? (
-                                                                    <Tooltip title={t("userCenter.saveToAsset")}>
-                                                                        <Button
-                                                                            size="small"
-                                                                            type="text"
-                                                                            icon={<FolderPlus className="size-3.5 text-amber-600" />}
-                                                                            loading={savingMedia[task.image.mediaId]}
-                                                                            onClick={() =>
-                                                                                handleSaveToAsset(
-                                                                                    batch.id,
-                                                                                    task.image!.mediaId,
-                                                                                    batch.prompt,
-                                                                                )
-                                                                            }
-                                                                        />
-                                                                    </Tooltip>
-                                                                ) : null}
-                                                                <a
-                                                                    href={task.image.url}
-                                                                    download={`image_${task.sequence + 1}.png`}
-                                                                    className="inline-flex size-6 items-center justify-center rounded text-stone-500 hover:text-stone-900 dark:hover:text-stone-100"
-                                                                >
-                                                                    <Download className="size-3.5" />
-                                                                </a>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            </Card>
-                        );
-                    })}
+                    {filteredBatches.map((batch) => (
+                        <GenerationBatchCard key={batch.id} batch={batch} listOffset={offset} />
+                    ))}
                 </div>
             )}
+
+            {batches.length ? (
+                <div className="flex items-center justify-center gap-2">
+                    <Button disabled={offset === 0 || isFetching} onClick={() => setOffset((current) => Math.max(current - GENERATION_PAGE_SIZE, 0))}>
+                        {t("common.previousPage")}
+                    </Button>
+                    <span className="text-xs text-stone-500">{t("common.pageIndex", { page: offset / GENERATION_PAGE_SIZE + 1 })}</span>
+                    <Button disabled={!data?.hasMore || isFetching} onClick={() => setOffset((current) => current + GENERATION_PAGE_SIZE)}>
+                        {t("common.nextPage")}
+                    </Button>
+                </div>
+            ) : null}
         </div>
+    );
+}
+
+function GenerationBatchCard({ batch, listOffset }: { batch: GenerationBatchListItem; listOffset: number }) {
+    const { t } = useTranslation();
+    const { message } = App.useApp();
+    const navigate = useNavigate();
+    const copyText = useCopyText();
+    const queryClient = useQueryClient();
+    const hydrateAssets = useAssetStore((state) => state.hydrateAssets);
+    const [expanded, setExpanded] = useState(false);
+    const [savingMedia, setSavingMedia] = useState<Record<string, boolean>>({});
+
+    const remainingDays = expirationDays(batch.createdAt, batch.retentionDays);
+    const isExpired = remainingDays <= 0;
+
+    const { data: detail, isFetching: isLoadingDetail } = useQuery({
+        queryKey: detailKey(batch.id),
+        queryFn: () => getGenerationBatch(batch.id),
+        enabled: expanded,
+        // 只有该批次仍有未完成任务时才继续轮询详情。
+        refetchInterval: (query) =>
+            (query.state.data?.tasks ?? []).some((task) => task.status === "queued" || task.status === "running") ? 3000 : false,
+    });
+
+    const isAllSaved = Boolean(detail && detail.tasks.length > 0 && detail.tasks.every((task) => task.image?.isSaved));
+
+    const deleteMutation = useMutation({
+        mutationFn: () => deleteGenerationBatch(batch.id),
+        onSuccess: async () => {
+            message.success(t("userCenter.deleteBatchSuccess"));
+            await queryClient.invalidateQueries({ queryKey: listKey(listOffset) });
+        },
+        onError: (error) => message.error(error instanceof Error ? error.message : t("userCenter.deleteBatchFailed")),
+    });
+
+    /** 转存成功后强制刷新素材 store，否则「我的素材」页会一直显示旧数据。 */
+    const syncAssets = async () => {
+        await queryClient.invalidateQueries({ queryKey: detailKey(batch.id) });
+        const userId = useAssetStore.getState().hydratedUserId;
+        if (userId) await hydrateAssets(userId, true);
+    };
+
+    const saveMedia = async (mediaId: string) => {
+        setSavingMedia((current) => ({ ...current, [mediaId]: true }));
+        try {
+            await createAsset({ type: "image", mediaId, title: batch.prompt.slice(0, 40) || t("userCenter.generatedAssetTitle"), scope: "private" });
+            message.success(t("userCenter.savedSuccess"));
+            await syncAssets();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("userCenter.saveFailedToAsset"));
+        } finally {
+            setSavingMedia((current) => ({ ...current, [mediaId]: false }));
+        }
+    };
+
+    const saveBatchMutation = useMutation({
+        mutationFn: async () => {
+            const pending = (detail?.tasks ?? []).flatMap((task) => (task.image?.mediaId && !task.image.isSaved ? [task.image.mediaId] : []));
+            if (!pending.length) return { saved: 0, failed: 0 };
+            const results = await Promise.allSettled(
+                pending.map((mediaId) =>
+                    createAsset({ type: "image", mediaId, title: batch.prompt.slice(0, 40) || t("userCenter.generatedAssetTitle"), scope: "private" }),
+                ),
+            );
+            return { saved: results.filter((item) => item.status === "fulfilled").length, failed: results.filter((item) => item.status === "rejected").length };
+        },
+        onSuccess: async ({ saved, failed }) => {
+            // 只按实际成功数提示；失败的图片保持未转存状态，最终以服务端返回的详情为准。
+            if (!saved && !failed) message.info(t("userCenter.allAlreadySaved"));
+            else if (failed) message.warning(t("userCenter.saveAllPartial", { count: saved, failed }));
+            else message.success(t("userCenter.saveAllSuccess", { count: saved }));
+            await syncAssets();
+        },
+        onError: (error) => message.error(error instanceof Error ? error.message : t("userCenter.saveAllFailed")),
+    });
+
+    const downloadMutation = useMutation({
+        mutationFn: async () => {
+            const images = (detail?.tasks ?? []).flatMap((task) => (task.image?.url ? [{ url: task.image.url, name: `image_${task.sequence + 1}.png` }] : []));
+            if (!images.length) throw new Error(t("userCenter.downloadEmpty"));
+            const files = await Promise.all(
+                images.map(async (image) => ({ name: image.name, data: await (await fetch(image.url, { credentials: "include" })).blob() })),
+            );
+            saveAs(await createZip(files), `batch_${batch.id.slice(0, 8)}.zip`);
+        },
+        onError: (error) => message.error(error instanceof Error ? error.message : t("userCenter.downloadZipFailed")),
+    });
+
+    return (
+        <Card className="overflow-hidden border-stone-200 transition-shadow hover:shadow-sm dark:border-stone-800" styles={{ body: { padding: "1rem" } }}>
+            <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-xs text-stone-500">{dayjs(batch.createdAt).format("YYYY-MM-DD HH:mm:ss")}</span>
+                        {isAllSaved ? (
+                            <Tag color="success">{t("userCenter.savedPermanent")}</Tag>
+                        ) : isExpired ? (
+                            <Tag color="error">{t("userCenter.expiresToday")}</Tag>
+                        ) : (
+                            <Tag color={remainingDays <= 3 ? "warning" : "default"} icon={<Clock className="size-3" />}>
+                                {t("userCenter.expiresInDays", { days: remainingDays })}
+                            </Tag>
+                        )}
+                        {batch.summary ? (
+                            <span className="text-xs text-stone-500">
+                                {t("userCenter.batchCounts", { total: batch.summary.totalCount, succeeded: batch.summary.succeededCount })}
+                            </span>
+                        ) : null}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        <Tooltip title={t("userCenter.remixPrompt")}>
+                            <Button
+                                size="small"
+                                type="text"
+                                className="text-purple-600 hover:text-purple-700 dark:text-purple-400"
+                                icon={<Wand2 className="size-3.5" />}
+                                onClick={() => navigate("/image", { state: { prompt: batch.prompt, modelId: batch.modelId } })}
+                            />
+                        </Tooltip>
+                        <Tooltip title={t("common.copyPrompt")}>
+                            <Button size="small" type="text" icon={<Copy className="size-3.5" />} onClick={() => copyText(batch.prompt, t("common.promptCopied"))} />
+                        </Tooltip>
+                        {detail && !isAllSaved ? (
+                            <Tooltip title={t("userCenter.saveAllToAsset")}>
+                                <Button
+                                    size="small"
+                                    type="text"
+                                    className="text-amber-600 hover:text-amber-700 dark:text-amber-400"
+                                    icon={<FolderSync className="size-3.5" />}
+                                    loading={saveBatchMutation.isPending}
+                                    onClick={() => saveBatchMutation.mutate()}
+                                />
+                            </Tooltip>
+                        ) : null}
+                        {detail ? (
+                            <Tooltip title={t("userCenter.downloadAllImages")}>
+                                <Button size="small" type="text" icon={<Download className="size-3.5" />} loading={downloadMutation.isPending} onClick={() => downloadMutation.mutate()} />
+                            </Tooltip>
+                        ) : null}
+                        <Popconfirm
+                            title={t("userCenter.deleteBatchConfirm")}
+                            description={t("userCenter.deleteBatchDesc")}
+                            onConfirm={() => deleteMutation.mutate()}
+                            okText={t("common.delete")}
+                            cancelText={t("common.cancel")}
+                            okButtonProps={{ danger: true, loading: deleteMutation.isPending }}
+                        >
+                            <Button size="small" type="text" danger icon={<Trash2 className="size-3.5" />} />
+                        </Popconfirm>
+                    </div>
+                </div>
+
+                <div className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-stone-800 dark:bg-stone-900/60 dark:text-stone-200">
+                    <span className="font-medium">{batch.prompt}</span>
+                </div>
+
+                {!detail ? (
+                    <div className="flex items-center justify-between pt-1">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                            {batch.summary?.thumbnailMediaIds.map((mediaId) => (
+                                <img
+                                    key={mediaId}
+                                    src={`/api/media/${mediaId}`}
+                                    alt={batch.prompt}
+                                    className="size-12 rounded-lg border border-stone-200 object-cover dark:border-stone-800"
+                                    loading="lazy"
+                                />
+                            ))}
+                        </div>
+                        <Button size="small" loading={isLoadingDetail} onClick={() => setExpanded(true)}>
+                            {t("userCenter.viewDetail")}
+                        </Button>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-2 gap-3 pt-2 sm:grid-cols-3 md:grid-cols-4">
+                        {detail.tasks.map((task) => (
+                            <div
+                                key={task.id}
+                                className="group relative flex flex-col overflow-hidden rounded-xl border border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-900/40"
+                            >
+                                {task.image?.url ? (
+                                    <div className="relative aspect-square w-full overflow-hidden bg-stone-100 dark:bg-stone-950">
+                                        <Image src={task.image.url} alt={batch.prompt} className="h-full w-full object-cover" preview={{ mask: t("userCenter.previewMask") }} />
+                                        {task.image.isSaved ? (
+                                            <div className="absolute right-2 top-2 z-10">
+                                                <Tag color="success" className="!m-0">
+                                                    {t("userCenter.savedPermanent")}
+                                                </Tag>
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ) : (
+                                    <div className="flex aspect-square w-full items-center justify-center p-3 text-center text-xs text-stone-400">
+                                        {task.status === "failed" ? (
+                                            <span className="text-red-500">{t("userCenter.taskFailedReason", { reason: task.errorMessage || t("userCenter.unknownError") })}</span>
+                                        ) : (
+                                            <span>{t(`userCenter.task${task.status.charAt(0).toUpperCase() + task.status.slice(1)}`)}</span>
+                                        )}
+                                    </div>
+                                )}
+
+                                {task.image?.mediaId ? (
+                                    <div className="flex items-center justify-between border-t border-stone-200 p-2 text-xs dark:border-stone-800">
+                                        <span className="font-mono text-stone-400">{task.image.bytes ? formatBytes(task.image.bytes) : ""}</span>
+                                        <div className="flex items-center gap-1">
+                                            {!task.image.isSaved ? (
+                                                <Tooltip title={t("userCenter.saveToAsset")}>
+                                                    <Button
+                                                        size="small"
+                                                        type="text"
+                                                        icon={<FolderPlus className="size-3.5 text-amber-600" />}
+                                                        loading={savingMedia[task.image.mediaId]}
+                                                        onClick={() => void saveMedia(task.image!.mediaId)}
+                                                    />
+                                                </Tooltip>
+                                            ) : null}
+                                            <a
+                                                href={task.image.url}
+                                                download={`image_${task.sequence + 1}.png`}
+                                                className="inline-flex size-6 items-center justify-center rounded text-stone-500 hover:text-stone-900 dark:hover:text-stone-100"
+                                            >
+                                                <Download className="size-3.5" />
+                                            </a>
+                                        </div>
+                                    </div>
+                                ) : null}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </Card>
     );
 }

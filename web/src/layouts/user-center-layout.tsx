@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+import { Spin } from "antd";
 import { BarChart3, History, Images, LayoutDashboard, LogOut, ShieldCheck } from "lucide-react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -110,7 +112,9 @@ export default function UserCenterLayout() {
                     </div>
                 </header>
                 <main className="min-h-0 flex-1 overflow-y-auto">
-                    <Outlet />
+                    <Suspense fallback={<div className="flex h-full items-center justify-center"><Spin /></div>}>
+                        <Outlet />
+                    </Suspense>
                 </main>
             </div>
         </div>

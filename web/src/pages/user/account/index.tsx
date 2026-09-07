@@ -5,8 +5,6 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import dayjs from "dayjs";
 
-import { changePassword } from "@/services/api/auth";
-import { updateUserProfile } from "@/services/api/user-center";
 import { useUserStore } from "@/stores/use-user-store";
 
 export default function UserAccountPage() {
@@ -14,7 +12,8 @@ export default function UserAccountPage() {
     const { message } = App.useApp();
     const navigate = useNavigate();
     const user = useUserStore((state) => state.user);
-    const setUser = useUserStore((state) => state.setUser);
+    const updateDisplayName = useUserStore((state) => state.updateDisplayName);
+    const changePassword = useUserStore((state) => state.changePassword);
     const logout = useUserStore((state) => state.logout);
 
     const [profileLoading, setProfileLoading] = useState(false);
@@ -30,8 +29,7 @@ export default function UserAccountPage() {
         }
         setProfileLoading(true);
         try {
-            const updated = await updateUserProfile({ displayName: displayName.trim() });
-            setUser(updated);
+            await updateDisplayName(displayName.trim());
             message.success(t("userCenter.profileUpdated"));
         } catch (error) {
             message.error(error instanceof Error ? error.message : "更新失败");
@@ -47,7 +45,7 @@ export default function UserAccountPage() {
         }
         setPasswordLoading(true);
         try {
-            await changePassword(values.currentPassword, values.newPassword);
+            await changePassword({ currentPassword: values.currentPassword, newPassword: values.newPassword });
             message.success(t("userCenter.passwordChanged"));
             passwordForm.resetFields();
             await logout();
@@ -128,7 +126,7 @@ export default function UserAccountPage() {
                     <Form.Item
                         name="newPassword"
                         label={t("userCenter.newPassword")}
-                        rules={[{ required: true, min: 8, message: "新密码至少 8 位" }]}
+                        rules={[{ required: true, min: 10, message: "新密码至少 10 位" }]}
                     >
                         <Input.Password placeholder={t("userCenter.newPassword")} />
                     </Form.Item>

@@ -78,6 +78,7 @@ export type BatchSummary = {
   succeededCount: number;
   failedCount: number;
   activeCount: number;
+  savedCount: number;
   thumbnailMediaIds: string[];
 };
 
@@ -104,6 +105,26 @@ export async function generationBatchRoutes(app: FastifyInstance) {
     const user = await authenticate(request, reply);
     if (!user) return;
     const body = createBody.parse(request.body);
+
+    // 限制单用户活跃任务总数（排队中 + 运行中），防止单一用户刷量占满全局队列
+    const MAX_USER_ACTIVE_TASKS = 50;
+    const [activeRow] = await db
+      .select({ count: sql`count(*)::int` })
+      .from(generationTasks)
+      .where(
+        and(
+          eq(generationTasks.userId, user.id),
+          inArray(generationTasks.status, ["queued", "running"]),
+        ),
+      );
+    const activeCount = Number(activeRow?.count ?? 0);
+    if (activeCount + body.count > MAX_USER_ACTIVE_TASKS) {
+      return reply.code(429).send({
+        error: "too_many_active_tasks",
+        message: `您当前已有 ${activeCount} 个任务排队或运行中，超过人均并发上限 (${MAX_USER_ACTIVE_TASKS})，请等待当前任务完成后再提交`,
+      });
+    }
+
     const [model] = await db
       .select()
       .from(models)
@@ -212,9 +233,15 @@ export async function generationBatchRoutes(app: FastifyInstance) {
       .offset(offset);
     if (!batches.length) return { batches: [] };
     const taskRows = await db
-      .select({ batchId: generationTasks.batchId, status: generationTasks.status, mediaId: generatedImages.mediaId })
+      .select({
+        batchId: generationTasks.batchId,
+        status: generationTasks.status,
+        mediaId: generatedImages.mediaId,
+        savedAssetId: assets.id,
+      })
       .from(generationTasks)
       .leftJoin(generatedImages, eq(generatedImages.taskId, generationTasks.id))
+      .leftJoin(assets, and(eq(assets.mediaId, generatedImages.mediaId), eq(assets.ownerId, user.id)))
       .where(inArray(generationTasks.batchId, batches.map((batch) => batch.id)))
       .orderBy(asc(generationTasks.sequence));
     const tasksByBatch = new Map<string, typeof taskRows>();
@@ -231,6 +258,7 @@ export async function generationBatchRoutes(app: FastifyInstance) {
           succeededCount: tasks.filter((task) => task.status === "succeeded").length,
           failedCount: tasks.filter((task) => task.status === "failed" || task.status === "canceled").length,
           activeCount: tasks.filter((task) => task.status === "queued" || task.status === "running").length,
+          savedCount: tasks.filter((task) => task.savedAssetId).length,
           thumbnailMediaIds: tasks.flatMap((task) => (task.mediaId ? [task.mediaId] : [])).slice(0, 4),
         };
         return publicBatch(batch, summary);

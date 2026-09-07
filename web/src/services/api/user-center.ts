@@ -1,5 +1,5 @@
 import { apiRequest } from "./request";
-import type { User } from "@/stores/use-user-store";
+import type { AuthUser } from "@/services/api/auth";
 
 export type UserStats = {
     images: {
@@ -70,7 +70,7 @@ export async function getUserLogs(params: UserLogsQuery = {}) {
 }
 
 export async function updateUserProfile(payload: { displayName: string }) {
-    return (await apiRequest<{ user: User }>("/api/user/profile", {
+    return (await apiRequest<{ user: AuthUser }>("/api/user/profile", {
         method: "PATCH",
         body: payload,
     })).user;

@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import * as authApi from "@/services/api/auth";
 import type { AuthUser } from "@/services/api/auth";
+import { updateUserProfile } from "@/services/api/user-center";
 import { ApiError } from "@/services/api/request";
 
 type UserStore = {
@@ -11,6 +12,7 @@ type UserStore = {
     initialize: () => Promise<void>;
     login: (input: { username: string; password: string }) => Promise<AuthUser>;
     changePassword: (input: { currentPassword: string; newPassword: string }) => Promise<AuthUser>;
+    updateDisplayName: (displayName: string) => Promise<AuthUser>;
     logout: () => Promise<void>;
     clearSession: () => void;
     requirePasswordChange: () => void;
@@ -21,7 +23,8 @@ export const useUserStore = create<UserStore>()((set, get) => ({
     status: "idle",
     error: "",
     initialize: async () => {
-        if (get().status !== "idle") return;
+        // 允许从 error 重新进入，否则启动时一次网络抖动就把用户永久踢到登录页。
+        if (get().status !== "idle" && get().status !== "error") return;
         set({ status: "loading", error: "" });
         try {
             set({ user: await authApi.getCurrentUser(), status: "authenticated" });
@@ -38,6 +41,11 @@ export const useUserStore = create<UserStore>()((set, get) => ({
     changePassword: async (input) => {
         const user = await authApi.changePassword(input);
         set({ user, status: "authenticated", error: "" });
+        return user;
+    },
+    updateDisplayName: async (displayName) => {
+        const user = await updateUserProfile({ displayName });
+        set({ user });
         return user;
     },
     logout: async () => {

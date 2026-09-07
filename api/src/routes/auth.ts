@@ -52,6 +52,12 @@ class SimpleRateLimiter {
     if (this.records.size >= this.maxEntries) {
       this.cleanupExpired(now);
     }
+    // 硬上限保护：若清理过期后依然超限，淘汰 Map 中最先插入的最旧记录，防止恶意请求下内存无限膨胀
+    while (this.records.size >= this.maxEntries) {
+      const oldestKey = this.records.keys().next().value;
+      if (!oldestKey) break;
+      this.records.delete(oldestKey);
+    }
     const current = this.records.get(key);
     if (!current || now >= current.resetAt) {
       this.records.set(key, { count: 1, resetAt: now + windowMs });
@@ -82,8 +88,19 @@ export async function authRoutes(app: FastifyInstance) {
     const body = loginBody.parse(request.body);
     const username = body.username.toLowerCase();
     const clientIp = request.ip || "unknown";
-    const rateLimitKey = `login:${clientIp}:${username}`;
 
+    // 纯 IP 维度防密码喷洒：单个 IP 5 分钟内最多允许 30 次失败尝试
+    const ipRateLimitKey = `login:ip:${clientIp}`;
+    const ipLimitStatus = authRateLimiter.check(ipRateLimitKey, 30, 5 * 60 * 1000);
+    if (!ipLimitStatus.allowed) {
+      return reply
+        .code(429)
+        .header("Retry-After", String(ipLimitStatus.retryAfterSeconds))
+        .send({ error: "too_many_requests", message: `该 IP 尝试次数过多，请在 ${ipLimitStatus.retryAfterSeconds} 秒后再试` });
+    }
+
+    // 单账户维度防暴力破解：单个 IP + 用户名 1 分钟内最多允许 5 次失败尝试
+    const rateLimitKey = `login:${clientIp}:${username}`;
     const limitStatus = authRateLimiter.check(rateLimitKey, 5, 60 * 1000);
     if (!limitStatus.allowed) {
       return reply
@@ -103,6 +120,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     if (!user || !isValid) {
       authRateLimiter.recordFailure(rateLimitKey, 60 * 1000);
+      authRateLimiter.recordFailure(ipRateLimitKey, 5 * 60 * 1000);
       return reply.code(401).send({ error: "invalid_credentials", message: "用户名或密码错误" });
     }
 

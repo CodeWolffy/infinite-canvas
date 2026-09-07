@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Button } from "antd";
+import { Suspense, useState } from "react";
+import { Button, Spin } from "antd";
 import { BarChart3, Cable, History, Images, LayoutDashboard, LogOut, Megaphone, Shapes, UsersRound } from "lucide-react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 
@@ -63,7 +63,11 @@ export default function AdminLayout() {
                         <button type="button" className="inline-flex size-9 items-center justify-center rounded-lg text-stone-500 transition hover:bg-black/5 hover:text-stone-950 md:hidden dark:hover:bg-white/10 dark:hover:text-stone-100" title="退出登录" onClick={() => void logout().then(() => navigate("/login", { replace: true }))}><LogOut className="size-4" /></button>
                     </div>
                 </header>
-                <main className="min-h-0 flex-1 overflow-y-auto"><Outlet /></main>
+                <main className="min-h-0 flex-1 overflow-y-auto">
+                    <Suspense fallback={<div className="flex h-full items-center justify-center"><Spin /></div>}>
+                        <Outlet />
+                    </Suspense>
+                </main>
             </div>
             <AnnouncementEditor open={announcementOpen} onClose={() => setAnnouncementOpen(false)} />
         </div>

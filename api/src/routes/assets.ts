@@ -7,7 +7,11 @@ import { assets, mediaObjects } from "../db/schema.js";
 import { removeUnreferencedMedia } from "../media-cleanup.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() });
-const listQuery = z.object({ scope: z.enum(["private", "public", "all"]).default("all") });
+const listQuery = z.object({
+  scope: z.enum(["private", "public", "all"]).default("all"),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  offset: z.coerce.number().int().min(0).max(100000).default(0),
+});
 const assetFields = z.object({
   scope: z.enum(["private", "public"]).default("private"),
   type: z.enum(["image", "text"]),
@@ -47,14 +51,21 @@ export async function assetRoutes(app: FastifyInstance) {
   app.get("/", async (request, reply) => {
     const user = await authenticate(request, reply);
     if (!user) return;
-    const { scope } = listQuery.parse(request.query);
+    const { scope, limit, offset } = listQuery.parse(request.query);
     const visibility =
       scope === "private"
         ? and(eq(assets.ownerId, user.id), eq(assets.scope, "private"))
         : scope === "public"
           ? eq(assets.scope, "public")
           : or(eq(assets.ownerId, user.id), eq(assets.scope, "public"));
-    const result = await db.select().from(assets).where(visibility).orderBy(desc(assets.updatedAt));
+    // updatedAt 会有并列值，补 id 作为次级排序键，否则翻页时可能漏条或重复。
+    const result = await db
+      .select()
+      .from(assets)
+      .where(visibility)
+      .orderBy(desc(assets.updatedAt), desc(assets.id))
+      .limit(limit)
+      .offset(offset);
     return { assets: result };
   });
 

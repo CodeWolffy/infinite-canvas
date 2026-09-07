@@ -29,6 +29,8 @@ const schema = z.object({
   MINIO_BUCKET: z.string().min(3).max(63).default("infinite-canvas"),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(50 * 1024 * 1024),
   MAX_GENERATED_BYTES: z.coerce.number().int().positive().default(50 * 1024 * 1024),
+  // 上游返回的图片地址默认只允许公网主机；仅当中转网关部署在内网时才打开。
+  ALLOW_PRIVATE_IMAGE_HOSTS: booleanValue,
   IMAGE_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(20),
   ORPHAN_MEDIA_GRACE_DAYS: z.coerce.number().int().min(1).max(365).default(45),
   REQUEST_LOG_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),

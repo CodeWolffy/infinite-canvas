@@ -40,10 +40,12 @@ function channelValues(body: ChannelUpdate): Partial<typeof channels.$inferInser
   };
 }
 
-function modelsUrl(baseUrl: string, protocol: "openai" | "gemini", apiKey?: string) {
-  const url = new URL(baseUrl.endsWith("/") ? `${baseUrl}models` : `${baseUrl}/models`);
-  if (protocol === "gemini" && apiKey) url.searchParams.set("key", apiKey);
-  return url;
+function modelsUrl(baseUrl: string, protocol: "openai" | "gemini") {
+  let base = baseUrl.replace(/\/$/, "");
+  if (protocol === "gemini" && !base.includes("/v1beta") && !base.includes("/v1")) {
+    base = `${base}/v1beta`;
+  }
+  return new URL(`${base}/models`);
 }
 
 function extractModelNames(value: unknown) {
@@ -171,11 +173,17 @@ export async function adminChannelRoutes(app: FastifyInstance) {
       channelNameSnapshot: channel.name,
     });
     try {
-      const response = await fetch(modelsUrl(channel.baseUrl, channel.protocol, apiKey), {
-        headers:
-          channel.protocol === "openai" && apiKey
-            ? { Authorization: `Bearer ${apiKey}` }
-            : undefined,
+      const headers: Record<string, string> = {};
+      if (channel.protocol === "openai" && apiKey) {
+        headers["Authorization"] = `Bearer ${apiKey}`;
+      } else if (channel.protocol === "gemini" && apiKey) {
+        headers["x-goog-api-key"] = apiKey;
+        if (apiKey.startsWith("sk-")) {
+          headers["Authorization"] = `Bearer ${apiKey}`;
+        }
+      }
+      const response = await fetch(modelsUrl(channel.baseUrl, channel.protocol), {
+        headers: Object.keys(headers).length ? headers : undefined,
         signal: controller.signal,
       });
       if (!response.ok) {

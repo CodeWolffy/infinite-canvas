@@ -11,14 +11,14 @@ import {
     createCanvasProjectSnapshot,
     restoreCanvasProjectHistory,
     type CanvasProjectHistoryRecord,
-    type CanvasProjectRecord,
+    type CanvasProjectDetail,
 } from "@/services/api/canvas-projects";
 
 type Props = {
     projectId: string;
     open: boolean;
     onClose: () => void;
-    onRestored: (project: CanvasProjectRecord) => void;
+    onRestored: (project: CanvasProjectDetail) => void;
 };
 
 export function CanvasHistoryModal({ projectId, open, onClose, onRestored }: Props) {
@@ -63,15 +63,6 @@ export function CanvasHistoryModal({ projectId, open, onClose, onRestored }: Pro
 
     const handleCreateSnapshot = () => {
         createMutation.mutate(snapshotNote.trim() || undefined);
-    };
-
-    const formatDate = (dateStr: string) => {
-        try {
-            const date = new Date(dateStr);
-            return date.toLocaleString();
-        } catch {
-            return dateStr;
-        }
     };
 
     return (
@@ -130,11 +121,8 @@ export function CanvasHistoryModal({ projectId, open, onClose, onRestored }: Pro
                                 <HistoryItem
                                     key={item.id}
                                     item={item}
-                                    theme={theme}
-                                    formatDate={formatDate}
                                     onRestore={() => restoreMutation.mutate(item.id)}
                                     isRestoring={restoreMutation.isPending}
-                                    t={t}
                                 />
                             ))}
                         </div>
@@ -145,21 +133,22 @@ export function CanvasHistoryModal({ projectId, open, onClose, onRestored }: Pro
     );
 }
 
+function formatDate(value: string) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
 function HistoryItem({
     item,
-    theme,
-    formatDate,
     onRestore,
     isRestoring,
-    t,
 }: {
     item: CanvasProjectHistoryRecord;
-    theme: (typeof canvasThemes)[keyof typeof canvasThemes];
-    formatDate: (dateStr: string) => string;
     onRestore: () => void;
     isRestoring: boolean;
-    t: (key: string, defaultValue?: string, options?: Record<string, unknown>) => string;
 }) {
+    const { t } = useTranslation();
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const isManual = Boolean(item.note);
 
     return (

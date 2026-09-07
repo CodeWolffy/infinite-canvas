@@ -40,6 +40,8 @@ export function buildApp() {
     },
     trustProxy: config.TRUST_PROXY,
     ignoreTrailingSlash: true,
+    // 画布快照是普通 JSON 体，默认 1MB 上限会让大画布保存直接失败，这里与上传上限对齐。
+    bodyLimit: config.MAX_UPLOAD_BYTES,
   });
 
   app.register(cookie);
@@ -49,6 +51,13 @@ export function buildApp() {
   });
   app.register(multipart, {
     limits: { files: 1, fileSize: config.MAX_UPLOAD_BYTES },
+  });
+
+  // 注入基础安全响应头，防御 MIME 嗅探、点击劫持与跨源信息泄露
+  app.addHook("onSend", async (_request, reply) => {
+    reply.header("X-Content-Type-Options", "nosniff");
+    reply.header("X-Frame-Options", "SAMEORIGIN");
+    reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
   });
 
   app.get("/health", async (_request, reply) => {
@@ -91,6 +100,9 @@ export function buildApp() {
         : undefined;
     if (code === "FST_REQ_FILE_TOO_LARGE") {
       return reply.code(413).send({ error: "file_too_large", message: "图片超过上传大小限制" });
+    }
+    if (code === "FST_ERR_CTP_BODY_TOO_LARGE") {
+      return reply.code(413).send({ error: "payload_too_large", message: "请求数据过大，无法保存" });
     }
     if (code === "23505") {
       return reply.code(409).send({ error: "conflict", message: "数据已存在" });

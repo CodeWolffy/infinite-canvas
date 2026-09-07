@@ -195,8 +195,9 @@ function InfiniteCanvasPage() {
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
-    const openProject = useCanvasStore((state) => state.openProject);
+    const loadProject = useCanvasStore((state) => state.loadProject);
     const updateProject = useCanvasStore((state) => state.updateProject);
+    const applyRestoredProject = useCanvasStore((state) => state.applyRestoredProject);
     const flushProject = useCanvasStore((state) => state.flushProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
@@ -350,15 +351,18 @@ function InfiniteCanvasPage() {
     useEffect(() => {
         if (!hydrated) return;
         setProjectLoaded(false);
-        const project = openProject(projectId);
-        if (!project) {
-            navigate("/canvas", { replace: true });
-            return;
-        }
+        let cancelled = false;
 
         const restore = async () => {
+            const project = await loadProject(projectId).catch(() => undefined);
+            if (cancelled) return;
+            if (!project) {
+                navigate("/canvas", { replace: true });
+                return;
+            }
             const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes, project.connections));
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
+            if (cancelled) return;
             setNodes(restoredNodes);
             setConnections(project.connections);
             setChatSessions(restoredSessions);
@@ -383,7 +387,10 @@ function InfiniteCanvasPage() {
             setProjectLoaded(true);
         };
         void restore();
-    }, [hydrated, navigate, openProject, projectId]);
+        return () => {
+            cancelled = true;
+        };
+    }, [hydrated, navigate, loadProject, projectId]);
 
     useEffect(() => {
         if (!projectLoaded || !["new", "recent", "choose"].includes(searchParams.get("mode") || "")) return;
@@ -3494,7 +3501,15 @@ function InfiniteCanvasPage() {
                     open={historyModalOpen}
                     onClose={() => setHistoryModalOpen(false)}
                     onRestored={async (restoredRecord) => {
-                        const snapshot = restoredRecord.snapshot && typeof restoredRecord.snapshot === "object" ? (restoredRecord.snapshot as any) : {};
+                        const snapshot = (restoredRecord.snapshot && typeof restoredRecord.snapshot === "object" ? restoredRecord.snapshot : {}) as Partial<{
+                            nodes: CanvasNodeData[];
+                            connections: CanvasConnection[];
+                            chatSessions: CanvasAssistantSession[];
+                            activeChatId: string | null;
+                            backgroundMode: CanvasBackgroundMode;
+                            showImageInfo: boolean;
+                            viewport: ViewportTransform;
+                        }>;
                         const rawNodes = snapshot.nodes || [];
                         const rawConnections = snapshot.connections || [];
                         const rawSessions = snapshot.chatSessions || [];
@@ -3512,15 +3527,8 @@ function InfiniteCanvasPage() {
                         historyRef.current = { past: [], future: [] };
                         setHistoryState({ canUndo: false, canRedo: false });
 
-                        updateProject(projectId, {
-                            nodes: restoredNodes,
-                            connections: rawConnections,
-                            chatSessions: restoredSessions,
-                            activeChatId: snapshot.activeChatId || null,
-                            backgroundMode: snapshot.backgroundMode || "lines",
-                            showImageInfo: snapshot.showImageInfo || false,
-                            viewport: snapshot.viewport || viewport,
-                        });
+                        // 服务端已经写入还原后的快照，这里只同步 store，不再触发一次回写。
+                        applyRestoredProject(restoredRecord);
                     }}
                 />
             </section>

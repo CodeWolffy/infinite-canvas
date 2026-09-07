@@ -38,6 +38,7 @@ export async function finishRequestLog(
 
 export async function cleanupOldRequestLogs() {
   const cutoff = new Date(Date.now() - config.REQUEST_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-  const result = await db.delete(requestLogs).where(lt(requestLogs.startedAt, cutoff)).returning({ id: requestLogs.id });
-  return result.length;
+  // 只取影响行数，避免把 30 天的日志主键全部回传到进程内存。
+  const result = await db.delete(requestLogs).where(lt(requestLogs.startedAt, cutoff));
+  return result.count ?? 0;
 }

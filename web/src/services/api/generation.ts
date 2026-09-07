@@ -53,10 +53,16 @@ export type GenerationBatchSummary = {
     succeededCount: number;
     failedCount: number;
     activeCount: number;
+    savedCount: number;
     thumbnailMediaIds: string[];
 };
 
 export type GenerationBatchListItem = GenerationBatch & { summary: GenerationBatchSummary };
+
+export type GenerationBatchPage = { batches: GenerationBatchListItem[]; hasMore: boolean };
+
+/** 服务端单页上限 100，永远不要一次把用户的全部生图历史拉下来。 */
+export const GENERATION_PAGE_SIZE = 50;
 
 const publicModelsCacheTtl = 60_000;
 let publicModelsCache: { models: PublicModel[]; expiresAt: number } | null = null;
@@ -93,13 +99,9 @@ export async function createGenerationBatch(input: { modelId: string; prompt: st
     return await apiRequest<{ batch: GenerationBatch; tasks: GenerationTask[] }>("/api/generation-batches", { method: "POST", body: input });
 }
 
-export async function listGenerationBatches() {
-    const batches: GenerationBatchListItem[] = [];
-    for (;;) {
-        const page = (await apiRequest<{ batches: GenerationBatchListItem[] }>(`/api/generation-batches?limit=100&offset=${batches.length}`)).batches;
-        batches.push(...page);
-        if (page.length < 100) return batches;
-    }
+export async function listGenerationBatches(limit = GENERATION_PAGE_SIZE, offset = 0): Promise<GenerationBatchPage> {
+    const batches = (await apiRequest<{ batches: GenerationBatchListItem[] }>(`/api/generation-batches?limit=${limit}&offset=${offset}`)).batches;
+    return { batches, hasMore: batches.length === limit };
 }
 
 export async function getGenerationBatch(id: string) {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, lt } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/client.js";
 import { sessions, users, type User } from "../db/schema.js";
@@ -62,6 +62,12 @@ export async function revokeUserSessions(userId: string) {
     .update(sessions)
     .set({ revokedAt: new Date() })
     .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+}
+
+/** 已过期的会话在 authenticate 里已经必然被拒绝，直接物理删除，避免表无限增长。 */
+export async function cleanupExpiredSessions() {
+  const result = await db.delete(sessions).where(lt(sessions.expiresAt, new Date()));
+  return result.count ?? 0;
 }
 
 export async function authenticate(

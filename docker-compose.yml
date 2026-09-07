@@ -19,6 +19,8 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL}
+      # Nginx 前置反代时必须为 true，API 才能从 X-Forwarded-For 取到真实客户端 IP（登录限流按 IP 生效）。
+      TRUST_PROXY: ${TRUST_PROXY:-true}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       SESSION_DAYS: ${SESSION_DAYS:-7}
@@ -35,7 +37,9 @@ services:
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-52428800}
       MAX_GENERATED_BYTES: ${MAX_GENERATED_BYTES:-52428800}
       IMAGE_WORKER_CONCURRENCY: ${IMAGE_WORKER_CONCURRENCY:-20}
+      ALLOW_PRIVATE_IMAGE_HOSTS: ${ALLOW_PRIVATE_IMAGE_HOSTS:-false}
       ORPHAN_MEDIA_GRACE_DAYS: ${ORPHAN_MEDIA_GRACE_DAYS:-45}
+      REQUEST_LOG_RETENTION_DAYS: ${REQUEST_LOG_RETENTION_DAYS:-30}
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,4 +1,4 @@
-import { and, eq, isNull, lte } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte } from "drizzle-orm";
 import { db } from "./db/client.js";
 import { config } from "./config.js";
 import {
@@ -15,33 +15,75 @@ export async function removeUnreferencedMedia(
   mediaIds: string[],
   reportError: (error: unknown, mediaId: string) => void,
 ) {
-  for (const mediaId of [...new Set(mediaIds)]) {
-    try {
-      const mediaToDelete = await db.transaction(async (tx) => {
-        const [claimed] = await tx
+  const uniqueIds = [...new Set(mediaIds)];
+  if (!uniqueIds.length) return;
+
+  let toDelete: Array<{ id: string; bucket: string; objectKey: string }> = [];
+  try {
+    toDelete = await db.transaction(async (tx) => {
+      // 1. 批量锁定候选对象状态为 deleting
+      const claimed = await tx
+        .update(mediaObjects)
+        .set({ status: "deleting" })
+        .where(and(inArray(mediaObjects.id, uniqueIds), eq(mediaObjects.status, "ready")))
+        .returning({ id: mediaObjects.id, bucket: mediaObjects.bucket, objectKey: mediaObjects.objectKey });
+
+      if (!claimed.length) return [];
+      const claimedIds = claimed.map((item) => item.id);
+
+      // 2. 批量检查 5 个业务表的引用
+      const [refAssets, refGenerated, refCanvas, refBatch, refMessage] = await Promise.all([
+        tx.select({ mediaId: assets.mediaId }).from(assets).where(inArray(assets.mediaId, claimedIds)),
+        tx.select({ mediaId: generatedImages.mediaId }).from(generatedImages).where(inArray(generatedImages.mediaId, claimedIds)),
+        tx.select({ mediaId: canvasProjectMedia.mediaId }).from(canvasProjectMedia).where(inArray(canvasProjectMedia.mediaId, claimedIds)),
+        tx.select({ mediaId: generationBatchMedia.mediaId }).from(generationBatchMedia).where(inArray(generationBatchMedia.mediaId, claimedIds)),
+        tx.select({ mediaId: messageMedia.mediaId }).from(messageMedia).where(inArray(messageMedia.mediaId, claimedIds)),
+      ]);
+
+      const referencedSet = new Set<string>();
+      for (const row of [...refAssets, ...refGenerated, ...refCanvas, ...refBatch, ...refMessage]) {
+        if (row.mediaId) referencedSet.add(row.mediaId);
+      }
+
+      // 3. 仍有引用的恢复为 ready
+      if (referencedSet.size > 0) {
+        await tx
           .update(mediaObjects)
-          .set({ status: "deleting" })
-          .where(and(eq(mediaObjects.id, mediaId), eq(mediaObjects.status, "ready")))
-          .returning();
-        if (!claimed) return undefined;
-        const [[asset], [generated], [canvas], [batch], [message]] = await Promise.all([
-          tx.select({ id: assets.id }).from(assets).where(eq(assets.mediaId, mediaId)).limit(1),
-          tx.select({ id: generatedImages.id }).from(generatedImages).where(eq(generatedImages.mediaId, mediaId)).limit(1),
-          tx.select({ id: canvasProjectMedia.projectId }).from(canvasProjectMedia).where(eq(canvasProjectMedia.mediaId, mediaId)).limit(1),
-          tx.select({ id: generationBatchMedia.batchId }).from(generationBatchMedia).where(eq(generationBatchMedia.mediaId, mediaId)).limit(1),
-          tx.select({ id: messageMedia.messageId }).from(messageMedia).where(eq(messageMedia.mediaId, mediaId)).limit(1),
-        ]);
-        if (asset || generated || canvas || batch || message) {
-          await tx.update(mediaObjects).set({ status: "ready" }).where(eq(mediaObjects.id, mediaId));
-          return undefined;
-        }
-        await tx.delete(mediaObjects).where(and(eq(mediaObjects.id, mediaId), eq(mediaObjects.status, "deleting")));
-        return claimed;
-      });
-      if (!mediaToDelete) continue;
-      await minio.removeObject(mediaToDelete.bucket, mediaToDelete.objectKey);
+          .set({ status: "ready" })
+          .where(inArray(mediaObjects.id, [...referencedSet]));
+      }
+
+      // 4. 确认无引用的从数据库中批量删除
+      const confirmed = claimed.filter((item) => !referencedSet.has(item.id));
+      if (confirmed.length > 0) {
+        await tx
+          .delete(mediaObjects)
+          .where(and(inArray(mediaObjects.id, confirmed.map((item) => item.id)), eq(mediaObjects.status, "deleting")));
+      }
+      return confirmed;
+    });
+  } catch (error) {
+    reportError(error, uniqueIds.join(","));
+    return;
+  }
+
+  if (!toDelete.length) return;
+
+  // 5. MinIO 侧使用 removeObjects 批量删除，消除逐张图往返请求
+  const byBucket = new Map<string, string[]>();
+  for (const item of toDelete) {
+    const list = byBucket.get(item.bucket) ?? [];
+    list.push(item.objectKey);
+    byBucket.set(item.bucket, list);
+  }
+
+  for (const [bucket, keys] of byBucket) {
+    try {
+      await minio.removeObjects(bucket, keys);
     } catch (error) {
-      reportError(error, mediaId);
+      for (const key of keys) {
+        reportError(error, key);
+      }
     }
   }
 }

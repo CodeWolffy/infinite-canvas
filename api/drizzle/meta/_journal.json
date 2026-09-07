@@ -50,6 +50,20 @@
       "when": 1787894400000,
       "tag": "0006_request_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787980800000,
+      "tag": "0007_canvas_project_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787984400000,
+      "tag": "0008_perf_indexes",
+      "breakpoints": true
     }
   ]
 }

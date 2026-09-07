@@ -123,8 +123,9 @@ export async function textRoutes(app: FastifyInstance) {
       if (visible.length !== attachmentMediaIds.length) {
         return reply.code(400).send({ error: "invalid_media", message: "附件不存在或无权访问" });
       }
+      const maxMb = Math.round(config.MAX_UPLOAD_BYTES / (1024 * 1024));
       if (visible.some((media) => !supportedAttachmentMime.has(media.mimeType) || media.byteSize > config.MAX_UPLOAD_BYTES)) {
-        return reply.code(400).send({ error: "invalid_media", message: "附件仅支持 20MB 以内的 PNG、JPEG 或 WebP 图片" });
+        return reply.code(400).send({ error: "invalid_media", message: `附件仅支持 ${maxMb}MB 以内的 PNG、JPEG 或 WebP 图片` });
       }
       const visibleById = new Map(visible.map((media) => [media.id, media]));
       attachmentMedia = attachmentMediaIds.map((id) => visibleById.get(id)!);
@@ -199,18 +200,33 @@ export async function textRoutes(app: FastifyInstance) {
             attachmentMediaIds.map((mediaId) => ({ messageId: inserted[0]!.id, mediaId })),
           );
         }
-        const [textRequest] = await tx
-          .insert(textRequests)
-          .values({
-            id: body.requestId,
-            userId: user.id,
-            conversationId,
-            requestMessageId: inserted[0]!.id,
-            modelId: body.modelId,
-            status: "running",
-            startedAt,
-          })
-          .returning();
+        const [textRequest] = existingRequest
+          ? await tx
+              .update(textRequests)
+              .set({
+                conversationId,
+                requestMessageId: inserted[0]!.id,
+                modelId: body.modelId,
+                status: "running",
+                errorCode: null,
+                responseMessageId: null,
+                startedAt,
+                finishedAt: null,
+              })
+              .where(eq(textRequests.id, body.requestId))
+              .returning()
+          : await tx
+              .insert(textRequests)
+              .values({
+                id: body.requestId,
+                userId: user.id,
+                conversationId,
+                requestMessageId: inserted[0]!.id,
+                modelId: body.modelId,
+                status: "running",
+                startedAt,
+              })
+              .returning();
         return { conversationId, requestMessage: inserted[0]!, textRequest: textRequest! };
       });
       const { conversationId, requestMessage, textRequest } = created;
@@ -220,7 +236,7 @@ export async function textRoutes(app: FastifyInstance) {
           .select({ id: messages.id, role: messages.role, content: messages.content })
           .from(messages)
           .where(eq(messages.conversationId, conversationId))
-          .orderBy(desc(messages.createdAt))
+          .orderBy(desc(messages.createdAt), desc(messages.id))
           .limit(maxHistoryMessages);
         const history = recentMessages.reverse();
         const attachmentImages = await loadAttachmentImages(attachmentMedia);
@@ -322,7 +338,7 @@ export async function textRoutes(app: FastifyInstance) {
       .select()
       .from(messages)
       .where(eq(messages.conversationId, id))
-      .orderBy(asc(messages.createdAt));
+      .orderBy(asc(messages.createdAt), asc(messages.id));
     const [latestRequest] = await db
       .select({ id: textRequests.id, status: textRequests.status, errorCode: textRequests.errorCode, responseMessageId: textRequests.responseMessageId, createdAt: textRequests.createdAt, finishedAt: textRequests.finishedAt })
       .from(textRequests)

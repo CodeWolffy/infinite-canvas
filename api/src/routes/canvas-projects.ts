@@ -1,11 +1,13 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { authenticate } from "../auth/session.js";
 import { db } from "../db/client.js";
 import { canvasProjects, canvasProjectHistory } from "../db/schema.js";
 import { removeUnreferencedMedia } from "../media-cleanup.js";
 import { releaseCanvasMedia, syncCanvasMedia } from "../media-references.js";
+
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 const historyParamsSchema = z.object({ id: z.string().uuid(), historyId: z.string().uuid() });
@@ -20,13 +22,64 @@ const updateBody = z
   .refine((body) => Object.keys(body).length > 0);
 
 const MAX_HISTORY_PER_PROJECT = 20;
+const AUTO_BACKUP_INTERVAL_MS = 5 * 60 * 1000;
+
+async function trimHistory(tx: Transaction, projectId: string) {
+  await tx.execute(sql`
+    delete from canvas_project_history
+    where project_id = ${projectId}
+      and id not in (
+        select id from canvas_project_history
+        where project_id = ${projectId}
+        order by created_at desc
+        limit ${MAX_HISTORY_PER_PROJECT}
+      )
+  `);
+}
+
+/**
+ * 自动备份：仅在「忽略视口后内容确实变化」且「距上次自动备份超过 5 分钟」时才写一份快照。
+ * 以前每次保存（包括只拖动视口）都会复制一份完整快照，画布越大写放大越严重。
+ * 判断与拷贝都在库内完成，旧快照不会回传到 Node。
+ */
+async function autoBackupSnapshot(tx: Transaction, projectId: string, userId: string, nextSnapshot: unknown) {
+  const [recent] = await tx
+    .select({ id: canvasProjectHistory.id })
+    .from(canvasProjectHistory)
+    .where(
+      and(
+        eq(canvasProjectHistory.projectId, projectId),
+        isNull(canvasProjectHistory.note),
+        gt(canvasProjectHistory.createdAt, new Date(Date.now() - AUTO_BACKUP_INTERVAL_MS)),
+      ),
+    )
+    .limit(1);
+  if (recent) return;
+  const inserted = await tx.execute(sql`
+    insert into canvas_project_history (project_id, user_id, title, snapshot)
+    select cp.id, ${userId}::uuid, cp.title, cp.snapshot
+    from canvas_projects cp
+    where cp.id = ${projectId}::uuid
+      and (cp.snapshot - 'viewport') is distinct from (${JSON.stringify(nextSnapshot)}::jsonb - 'viewport')
+    returning id
+  `);
+  if (inserted.length) await trimHistory(tx, projectId);
+}
 
 export async function canvasProjectRoutes(app: FastifyInstance) {
   app.get("/", async (request, reply) => {
     const user = await authenticate(request, reply);
     if (!user) return;
+    // 列表只下发元数据与规模统计，避免把每个项目的完整快照都传给前端。
     const projects = await db
-      .select()
+      .select({
+        id: canvasProjects.id,
+        title: canvasProjects.title,
+        createdAt: canvasProjects.createdAt,
+        updatedAt: canvasProjects.updatedAt,
+        nodeCount: sql<number>`coalesce(jsonb_array_length((${canvasProjects.snapshot}->'nodes')::jsonb), 0)::int`,
+        connectionCount: sql<number>`coalesce(jsonb_array_length((${canvasProjects.snapshot}->'connections')::jsonb), 0)::int`,
+      })
       .from(canvasProjects)
       .where(eq(canvasProjects.userId, user.id))
       .orderBy(desc(canvasProjects.updatedAt));
@@ -83,38 +136,25 @@ export async function canvasProjectRoutes(app: FastifyInstance) {
       const result = await db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${id}::text, 0))`);
         const [existing] = await tx
-          .select({ id: canvasProjects.id, title: canvasProjects.title, snapshot: canvasProjects.snapshot })
+          .select({ id: canvasProjects.id })
           .from(canvasProjects)
           .where(and(eq(canvasProjects.id, id), eq(canvasProjects.userId, user.id)))
           .limit(1);
         if (!existing) return undefined;
 
-        // Auto backup current snapshot to history before saving new changes
-        if (body.snapshot !== undefined && existing.snapshot !== undefined) {
-          await tx.insert(canvasProjectHistory).values({
-            projectId: id,
-            userId: user.id,
-            title: existing.title,
-            snapshot: existing.snapshot,
-          });
-          await tx.execute(sql`
-            delete from canvas_project_history
-            where project_id = ${id}
-              and id not in (
-                select id from canvas_project_history
-                where project_id = ${id}
-                order by created_at desc
-                limit ${MAX_HISTORY_PER_PROJECT}
-              )
-          `);
-        }
+        if (body.snapshot !== undefined) await autoBackupSnapshot(tx, id, user.id, body.snapshot);
 
         const removedIds = body.snapshot !== undefined ? await syncCanvasMedia(tx, id, user.id, body.snapshot) : [];
         const [saved] = await tx
           .update(canvasProjects)
           .set({ ...body, updatedAt: new Date() })
           .where(eq(canvasProjects.id, id))
-          .returning();
+          .returning({
+            id: canvasProjects.id,
+            title: canvasProjects.title,
+            createdAt: canvasProjects.createdAt,
+            updatedAt: canvasProjects.updatedAt,
+          });
         return { project: saved, removedIds };
       });
       if (!result) return reply.code(404).send({ error: "not_found", message: "画布项目不存在" });
@@ -155,23 +195,37 @@ const createSnapshotBody = z.object({ note: z.string().trim().max(200).optional(
     if (!user) return;
     const { id } = paramsSchema.parse(request.params);
     const body = createSnapshotBody.parse(request.body ?? {});
-    const [project] = await db
-      .select({ id: canvasProjects.id, title: canvasProjects.title, snapshot: canvasProjects.snapshot })
-      .from(canvasProjects)
-      .where(and(eq(canvasProjects.id, id), eq(canvasProjects.userId, user.id)))
-      .limit(1);
-    if (!project) return reply.code(404).send({ error: "not_found", message: "画布项目不存在" });
-    const [saved] = await db
-      .insert(canvasProjectHistory)
-      .values({
-        projectId: id,
-        userId: user.id,
-        title: project.title,
-        note: body.note?.trim() || null,
-        snapshot: project.snapshot,
-      })
-      .returning();
-    return reply.code(201).send({ history: saved });
+    const saved = await db.transaction(async (tx) => {
+      const [project] = await tx
+        .select({ id: canvasProjects.id })
+        .from(canvasProjects)
+        .where(and(eq(canvasProjects.id, id), eq(canvasProjects.userId, user.id)))
+        .limit(1);
+      if (!project) return undefined;
+      // 直接在库内拷贝当前快照，避免把整份 snapshot 拉进 Node 再写回去。
+      const [row] = await tx.execute(sql`
+        insert into canvas_project_history (project_id, user_id, title, note, snapshot)
+        select cp.id, ${user.id}::uuid, cp.title, ${body.note?.trim() || null}, cp.snapshot
+        from canvas_projects cp
+        where cp.id = ${id}::uuid
+        returning id, title, note, created_at,
+          coalesce(jsonb_array_length((snapshot->'nodes')::jsonb), 0)::int as node_count,
+          coalesce(jsonb_array_length((snapshot->'connections')::jsonb), 0)::int as connection_count
+      `);
+      await trimHistory(tx, id);
+      return row as Record<string, unknown> | undefined;
+    });
+    if (!saved) return reply.code(404).send({ error: "not_found", message: "画布项目不存在" });
+    return reply.code(201).send({
+      history: {
+        id: saved.id,
+        title: saved.title,
+        note: saved.note,
+        createdAt: saved.created_at,
+        nodeCount: Number(saved.node_count ?? 0),
+        connectionCount: Number(saved.connection_count ?? 0),
+      },
+    });
   });
 
   app.post("/:id/history/:historyId/restore", async (request, reply) => {
@@ -188,19 +242,20 @@ const createSnapshotBody = z.object({ note: z.string().trim().max(200).optional(
           .limit(1);
         if (!historyItem) return undefined;
         const [current] = await tx
-          .select({ id: canvasProjects.id, title: canvasProjects.title, snapshot: canvasProjects.snapshot })
+          .select({ id: canvasProjects.id })
           .from(canvasProjects)
           .where(and(eq(canvasProjects.id, id), eq(canvasProjects.userId, user.id)))
           .limit(1);
         if (!current) return undefined;
 
-        // Backup current before restoring
-        await tx.insert(canvasProjectHistory).values({
-          projectId: id,
-          userId: user.id,
-          title: current.title,
-          snapshot: current.snapshot,
-        });
+        // 还原是破坏性操作，无论间隔多久都先把当前版本备份一份。
+        await tx.execute(sql`
+          insert into canvas_project_history (project_id, user_id, title, snapshot)
+          select cp.id, ${user.id}::uuid, cp.title, cp.snapshot
+          from canvas_projects cp
+          where cp.id = ${id}::uuid
+        `);
+        await trimHistory(tx, id);
 
         const removedIds = await syncCanvasMedia(tx, id, user.id, historyItem.snapshot);
         const [saved] = await tx

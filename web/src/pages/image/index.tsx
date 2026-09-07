@@ -131,7 +131,8 @@ export default function ImagePage() {
     }, [previewLog]);
 
     useEffect(() => {
-        void Promise.all([getPublicModels(), listGenerationBatches(), getGenerationPreferences()]).then(async ([availableModels, batches, preferences]) => {
+        void Promise.all([getPublicModels(), listGenerationBatches(), getGenerationPreferences()]).then(async ([availableModels, batchPage, preferences]) => {
+            const batches = batchPage.batches;
             preferencesRef.current = preferences;
             const imageModels = availableModels.filter((item) => item.capability === "image");
             modelsRef.current = imageModels;

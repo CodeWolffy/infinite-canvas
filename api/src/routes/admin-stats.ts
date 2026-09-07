@@ -41,7 +41,7 @@ export async function adminStatsRoutes(app: FastifyInstance) {
     const textModelFilter = query.modelId ? sql`and tr.model_id = ${query.modelId}` : sql``;
     const textChannelFilter = query.channelId ? sql`and tr.channel_id = ${query.channelId}` : sql``;
 
-    const queue = await db.execute(sql`
+    const queuePromise = db.execute(sql`
       select
         count(*) filter (where status = 'queued')::int as queued_count,
         count(*) filter (where status = 'running')::int as running_count
@@ -49,13 +49,13 @@ export async function adminStatsRoutes(app: FastifyInstance) {
       where status in ('queued', 'running')
     `);
 
-    const storage = await db.execute(sql`
+    const storagePromise = db.execute(sql`
       select count(*)::int as total_count, coalesce(sum(byte_size), 0)::float8 as total_bytes
       from media_objects
       where status = 'ready'
     `);
 
-    const textTotals = await db.execute(sql`
+    const textTotalsPromise = db.execute(sql`
       select
         count(*)::int as request_count,
         count(*) filter (where status = 'succeeded')::int as succeeded_request_count,
@@ -65,7 +65,7 @@ export async function adminStatsRoutes(app: FastifyInstance) {
       ${textUserFilter} ${textModelFilter} ${textChannelFilter}
     `);
 
-    const totals = await db.execute(sql`
+    const totalsPromise = db.execute(sql`
       with base_tasks as (
         select gt.*
         from generation_tasks gt
@@ -101,7 +101,7 @@ export async function adminStatsRoutes(app: FastifyInstance) {
       select * from task_totals, image_totals, attempt_totals
     `);
 
-    const byUsers = await db.execute(sql`
+    const byUsersPromise = db.execute(sql`
       with filtered_tasks as (
         select gt.* from generation_tasks gt
         where gt.queued_at >= ${from} and gt.queued_at < ${to}
@@ -123,7 +123,7 @@ export async function adminStatsRoutes(app: FastifyInstance) {
       order by request_count desc
     `);
 
-    const byModels = await db.execute(sql`
+    const byModelsPromise = db.execute(sql`
       with filtered_tasks as (
         select gt.* from generation_tasks gt
         where gt.queued_at >= ${from} and gt.queued_at < ${to}
@@ -145,7 +145,7 @@ export async function adminStatsRoutes(app: FastifyInstance) {
       order by request_count desc
     `);
 
-    const byChannels = await db.execute(sql`
+    const byChannelsPromise = db.execute(sql`
       with filtered_tasks as (
         select gt.* from generation_tasks gt
         where gt.queued_at >= ${from} and gt.queued_at < ${to}
@@ -166,6 +166,17 @@ export async function adminStatsRoutes(app: FastifyInstance) {
       group by c.id, c.name
       order by attempt_count desc
     `);
+
+    // 7 个统计查询彼此独立，并发执行把总延迟从逐条累加压成最慢那条的耗时。
+    const [queue, storage, textTotals, totals, byUsers, byModels, byChannels] = await Promise.all([
+      queuePromise,
+      storagePromise,
+      textTotalsPromise,
+      totalsPromise,
+      byUsersPromise,
+      byModelsPromise,
+      byChannelsPromise,
+    ]);
 
     const total = totals[0] as Record<string, unknown> | undefined;
     const currentQueue = queue[0] as Record<string, unknown> | undefined;

@@ -26,6 +26,7 @@ export default function CanvasPage() {
     const projects = useCanvasStore((state) => state.projects);
     const createProject = useCanvasStore((state) => state.createProject);
     const importProject = useCanvasStore((state) => state.importProject);
+    const loadProjects = useCanvasStore((state) => state.loadProjects);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
 
@@ -37,6 +38,8 @@ export default function CanvasPage() {
         navigate(`/canvas/${id}${agentQuery}${agentHash}`, { replace: Boolean(agentHash) });
     };
     const createAndEnter = async () => enterProject(await createProject(t("canvas.defaultTitle", { count: projects.length + 1 })));
+    // 列表只有元数据，导出前先把选中项目的完整快照拉回来。
+    const exportSelected = async () => exportCanvasProjects(await loadProjects(selectedIds), `${t("canvas.title")}-${selectedIds.length}`);
     const importCanvas = async (file?: File) => {
         if (!file) return;
         try {
@@ -94,7 +97,7 @@ export default function CanvasPage() {
                     <div className="flex items-center gap-2">
                         {selectedIds.length ? (
                             <>
-                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportCanvasProjects(projects.filter((project) => selectedIds.includes(project.id)), `${t("canvas.title")}-${selectedIds.length}`)}>
+                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportSelected()}>
                                     {t("canvas.exportSelected")}
                                 </Button>
                                 <Button disabled={!hydrated} onClick={() => setDeleteIds(selectedIds)}>

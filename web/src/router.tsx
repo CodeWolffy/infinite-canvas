@@ -1,30 +1,33 @@
+import { lazy, Suspense } from "react";
+import { Spin } from "antd";
 import { createBrowserRouter, Navigate, Outlet } from "react-router-dom";
 
 import { AdminGuard, AuthGuard } from "@/components/auth/auth-guard";
 import { AnalyticsTracker } from "@/components/layout/analytics-tracker";
 import AdminLayout from "@/layouts/admin-layout";
 import UserLayout from "@/layouts/user-layout";
-import AdminAssetsPage from "@/pages/admin/assets";
-import AdminChannelsPage from "@/pages/admin/channels";
-import AdminLogsPage from "@/pages/admin/logs";
-import AdminModelsPage from "@/pages/admin/models";
-import AdminStatsPage from "@/pages/admin/stats";
-import AdminUsersPage from "@/pages/admin/users";
 import AssetsPage from "@/pages/assets";
 import CanvasPage from "@/pages/canvas";
-import CanvasProjectPage from "@/pages/canvas/project";
 import ChangePasswordPage from "@/pages/change-password";
 import HomePage from "@/pages/home";
-import ImagePage from "@/pages/image";
 import LoginPage from "@/pages/login";
 import NotFound from "@/pages/not-found";
 import PromptsPage from "@/pages/prompts";
-
 import UserCenterLayout from "@/layouts/user-center-layout";
-import UserGenerationsPage from "@/pages/user/generations";
-import UserStatsPage from "@/pages/user/stats";
-import UserLogsPage from "@/pages/user/logs";
-import UserAccountPage from "@/pages/user/account";
+
+// 管理后台、个人中心、画布详情和生图工作台体积最大且不是进入应用就需要，拆成独立 chunk 按需加载。
+const AdminAssetsPage = lazy(() => import("@/pages/admin/assets"));
+const AdminChannelsPage = lazy(() => import("@/pages/admin/channels"));
+const AdminLogsPage = lazy(() => import("@/pages/admin/logs"));
+const AdminModelsPage = lazy(() => import("@/pages/admin/models"));
+const AdminStatsPage = lazy(() => import("@/pages/admin/stats"));
+const AdminUsersPage = lazy(() => import("@/pages/admin/users"));
+const UserGenerationsPage = lazy(() => import("@/pages/user/generations"));
+const UserStatsPage = lazy(() => import("@/pages/user/stats"));
+const UserLogsPage = lazy(() => import("@/pages/user/logs"));
+const UserAccountPage = lazy(() => import("@/pages/user/account"));
+const CanvasProjectPage = lazy(() => import("@/pages/canvas/project"));
+const ImagePage = lazy(() => import("@/pages/image"));
 
 export const router = createBrowserRouter([
     { path: "/login", element: <LoginPage /> },
@@ -40,7 +43,9 @@ export const router = createBrowserRouter([
                 element: (
                     <UserLayout>
                         <AnalyticsTracker />
-                        <Outlet />
+                        <Suspense fallback={<div className="flex h-full items-center justify-center"><Spin /></div>}>
+                            <Outlet />
+                        </Suspense>
                     </UserLayout>
                 ),
                 children: [

@@ -76,24 +76,23 @@ function normalizeAsset(record: assetApi.AssetRecord): Asset {
             data: { content: record.content || "" },
         };
     }
-    const media = record.media;
-    const url = mediaUrl(media?.id || record.mediaId || "");
+    const url = mediaUrl(record.mediaId || "");
     return {
         ...common,
         kind: "image",
         coverUrl: url,
         data: {
             dataUrl: url,
-            storageKey: mediaId(media?.id || record.mediaId || ""),
-            width: media?.width || numberMetadata(metadata, "width"),
-            height: media?.height || numberMetadata(metadata, "height"),
-            bytes: media?.byteSize || numberMetadata(metadata, "bytes"),
-            mimeType: media?.mimeType || stringMetadata(metadata, "mimeType") || "image/png",
+            storageKey: mediaId(record.mediaId || ""),
+            width: numberMetadata(metadata, "width"),
+            height: numberMetadata(metadata, "height"),
+            bytes: numberMetadata(metadata, "bytes"),
+            mimeType: stringMetadata(metadata, "mimeType") || "image/png",
         },
     };
 }
 
-function assetInput(asset: AssetDraft): assetApi.CreateAssetInput {
+function assetInput(asset: AssetDraft): assetApi.AssetInput {
     const { kind, title, tags, source, note, data, metadata } = asset;
     const commonMetadata = { ...metadata, ...(tags?.length ? { tags } : {}), ...(source ? { source } : {}), ...(note ? { note } : {}) };
     if (kind === "text") {
@@ -103,7 +102,7 @@ function assetInput(asset: AssetDraft): assetApi.CreateAssetInput {
         scope: asset.scope || "private",
         type: "image",
         title,
-        mediaId: mediaId(data.storageKey || data.dataUrl),
+        mediaId: mediaId(data.storageKey || ("dataUrl" in data ? data.dataUrl : data.url)),
         metadata: {
             ...commonMetadata,
             width: data.width,

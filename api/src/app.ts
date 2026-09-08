@@ -53,6 +53,20 @@ export function buildApp() {
     limits: { files: 1, fileSize: config.MAX_UPLOAD_BYTES },
   });
 
+  app.addHook("onRequest", async (request, reply) => {
+    if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
+    const origin = request.headers.origin;
+    if (!origin) return;
+    let sameOrigin = false;
+    try {
+      const parsed = new URL(origin);
+      sameOrigin = parsed.origin === origin && ["http:", "https:"].includes(parsed.protocol) && parsed.host === request.headers.host;
+    } catch {}
+    if (!sameOrigin && !config.CORS_ORIGINS.includes(origin)) {
+      return reply.code(403).send({ error: "invalid_origin", message: "请求来源不受信任" });
+    }
+  });
+
   // 注入基础安全响应头，防御 MIME 嗅探、点击劫持与跨源信息泄露
   app.addHook("onSend", async (_request, reply) => {
     reply.header("X-Content-Type-Options", "nosniff");

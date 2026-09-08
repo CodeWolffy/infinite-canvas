@@ -43,7 +43,7 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts }: User
     const loadStorageUsage = (open: boolean) => {
         if (!open || storageUsage) return;
         void getMyStorageUsage()
-            .then(({ totalCount, totalBytes }) => setStorageUsage(`${totalCount} 张图片 · ${formatBytes(totalBytes)}`))
+            .then(({ totalCount, totalBytes }) => setStorageUsage(`${totalCount} 张图片 · ${formatBytes(totalBytes) || "0 B"}`))
             .catch(() => undefined);
     };
 

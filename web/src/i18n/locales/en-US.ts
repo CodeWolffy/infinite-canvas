@@ -420,6 +420,7 @@ export default {
     },
     userCenter: {
         title: "User Center",
+        logout: "Sign out",
         navGenerations: "Generation History",
         navStats: "Usage Analytics",
         navLogs: "Request Logs",

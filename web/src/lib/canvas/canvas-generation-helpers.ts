@@ -3,6 +3,7 @@ import i18n from "@/i18n";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
+import { textGenerationRequests } from "@/lib/canvas/canvas-text-generation";
 import type { NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-angle-dialog";
@@ -123,7 +124,7 @@ export function resetInterruptedGeneration(nodes: CanvasNodeData[], connections:
         connections.flatMap((connection) => {
             const source = nodes.find((node) => node.id === connection.fromNodeId);
             const target = nodes.find((node) => node.id === connection.toNodeId);
-            const hasPendingText = target?.type === CanvasNodeType.Text && target.metadata?.status === "loading" && target.metadata.textRequestId;
+            const hasPendingText = target && target.metadata?.status === "loading" && textGenerationRequests(target).some((text) => text.status === "loading" && text.textRequestId);
             const hasPendingImages = target?.type === CanvasNodeType.Image && target.metadata?.images?.some((image) => image.status === "loading" && image.generationBatchId);
             const hasPendingVideo = target && hasResumableVideoTask(target);
             return source?.type === CanvasNodeType.Config && source.metadata?.status === "loading" && (hasPendingText || hasPendingImages || hasPendingVideo) ? [source.id] : [];
@@ -137,9 +138,13 @@ export function resetInterruptedGeneration(nodes: CanvasNodeData[], connections:
                 ? node
                 : { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } };
         }
-        const hasPendingText = node.type === CanvasNodeType.Text && node.metadata.textRequestId;
+        const hasPendingText = textGenerationRequests(node).some((text) => text.status === "loading" && text.textRequestId);
         const hasPendingImage = Boolean(node.metadata.images?.some((image) => image.status === "loading" && image.generationBatchId));
-        if (hasPendingText || hasPendingImage) return node;
+        if (hasPendingText) return {
+            ...node,
+            metadata: { ...node.metadata, texts: node.metadata.texts?.map((text) => text.status === "loading" && !text.textRequestId ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text) },
+        };
+        if (hasPendingImage) return node;
 
         return {
             ...node,

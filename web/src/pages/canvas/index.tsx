@@ -12,6 +12,7 @@ import { CanvasProjectCard } from "@/components/canvas/canvas-project-card";
 import type { CanvasExportFile } from "@/types/canvas-export";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
 import { hasAgentUrlBootstrap } from "@/lib/agent/agent-url-bootstrap";
 
@@ -42,11 +43,13 @@ export default function CanvasPage() {
     const exportSelected = async () => exportCanvasProjects(await loadProjects(selectedIds), `${t("canvas.title")}-${selectedIds.length}`);
     const importCanvas = async (file?: File) => {
         if (!file) return;
+        const sessionVersion = useUserStore.getState().sessionVersion;
         try {
             const zip = await readZip(file);
             const projectFile = zip.get("projects.json");
             if (!projectFile) throw new Error("missing projects.json");
             const data = JSON.parse(await projectFile.text()) as CanvasExportFile;
+            assertCurrentSession(sessionVersion);
             const storageKeys = new Map<string, string>();
             await Promise.all(
                 data.projects.flatMap((project) =>
@@ -63,6 +66,7 @@ export default function CanvasPage() {
                     }),
                 ),
             );
+            assertCurrentSession(sessionVersion);
             const replaceStorageKeys = (value: unknown): unknown => {
                 if (typeof value === "string") return storageKeys.get(value) || value;
                 if (Array.isArray(value)) return value.map(replaceStorageKeys);
@@ -70,8 +74,10 @@ export default function CanvasPage() {
                 return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replaceStorageKeys(item)]));
             };
             await Promise.all(data.projects.map((item) => importProject(replaceStorageKeys(item.project) as typeof item.project)));
+            assertCurrentSession(sessionVersion);
             message.success(t("canvas.imported", { count: data.projects.length }));
         } catch {
+            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             message.error(t("canvas.importFailed"));
         } finally {
             if (inputRef.current) inputRef.current.value = "";

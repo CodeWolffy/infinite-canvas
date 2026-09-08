@@ -1,6 +1,6 @@
 import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { db } from "./db/client.js";
-import { assets, canvasProjectMedia, mediaObjects } from "./db/schema.js";
+import { assets, canvasProjectHistory, canvasProjectHistoryMedia, canvasProjectMedia, mediaObjects } from "./db/schema.js";
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -42,7 +42,17 @@ export async function syncCanvasMedia(tx: Transaction, projectId: string, userId
     .select({ mediaId: canvasProjectMedia.mediaId })
     .from(canvasProjectMedia)
     .where(eq(canvasProjectMedia.projectId, projectId));
-  const visibility = or(eq(mediaObjects.ownerId, userId), eq(assets.scope, "public"), eq(assets.ownerId, userId));
+  const visibility = or(
+    eq(mediaObjects.ownerId, userId), eq(assets.scope, "public"), eq(assets.ownerId, userId),
+    sql`exists (
+      select 1 from canvas_project_media cpm join canvas_projects cp on cp.id = cpm.project_id
+      where cpm.media_id = ${mediaObjects.id} and cp.user_id = ${userId}::uuid
+    )`,
+    sql`exists (
+      select 1 from canvas_project_history_media hm join canvas_project_history h on h.id = hm.history_id
+      where hm.media_id = ${mediaObjects.id} and h.user_id = ${userId}::uuid
+    )`,
+  );
   const allowed = requestedIds.length
     ? await tx
         .selectDistinct({ id: mediaObjects.id })
@@ -83,6 +93,36 @@ export async function syncCanvasMedia(tx: Transaction, projectId: string, userId
   return removed;
 }
 
+export async function retainCanvasHistoryMedia(tx: Transaction, historyId: string, projectId: string) {
+  await tx.execute(sql`
+    with retained as (
+      insert into canvas_project_history_media (history_id, media_id)
+      select ${historyId}::uuid, media_id from canvas_project_media where project_id = ${projectId}::uuid
+      on conflict do nothing
+      returning media_id
+    )
+    update media_objects set reference_count = reference_count + 1
+    where id in (select media_id from retained)
+  `);
+}
+
+export async function releaseCanvasHistoryMedia(tx: Transaction, historyIds: string[]) {
+  if (!historyIds.length) return [];
+  const released = await tx.execute(sql`
+    with released as (
+      delete from canvas_project_history_media
+      where ${inArray(canvasProjectHistoryMedia.historyId, historyIds)}
+      returning media_id
+    ), counts as (
+      select media_id, count(*)::int as count from released group by media_id
+    )
+    update media_objects set reference_count = greatest(reference_count - counts.count, 0)
+    from counts where media_objects.id = counts.media_id
+    returning media_objects.id
+  `);
+  return released.map((row) => String(row.id));
+}
+
 export async function releaseCanvasMedia(tx: Transaction, projectId: string) {
   const current = await tx
     .select({ mediaId: canvasProjectMedia.mediaId })
@@ -95,5 +135,7 @@ export async function releaseCanvasMedia(tx: Transaction, projectId: string) {
       .where(inArray(mediaObjects.id, current.map((item) => item.mediaId)));
   }
   await tx.delete(canvasProjectMedia).where(eq(canvasProjectMedia.projectId, projectId));
-  return current.map((item) => item.mediaId);
+  const history = await tx.select({ id: canvasProjectHistory.id }).from(canvasProjectHistory).where(eq(canvasProjectHistory.projectId, projectId));
+  const releasedHistory = await releaseCanvasHistoryMedia(tx, history.map((item) => item.id));
+  return [...current.map((item) => item.mediaId), ...releasedHistory];
 }

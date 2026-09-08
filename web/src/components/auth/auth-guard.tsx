@@ -3,6 +3,7 @@ import { Navigate, useLocation } from "react-router-dom";
 import { Spin } from "antd";
 
 import { useUserStore } from "@/stores/use-user-store";
+import { authReturnPath } from "@/lib/auth-return-path";
 
 export function AuthGuard({ children }: { children: ReactNode }) {
     const location = useLocation();
@@ -11,6 +12,7 @@ export function AuthGuard({ children }: { children: ReactNode }) {
     const initialize = useUserStore((state) => state.initialize);
     const clearSession = useUserStore((state) => state.clearSession);
     const requirePasswordChange = useUserStore((state) => state.requirePasswordChange);
+    const from = authReturnPath(location.pathname === "/change-password" ? (location.state as { from?: string } | null)?.from : `${location.pathname}${location.search}${location.hash}`);
 
     useEffect(() => {
         void initialize();
@@ -28,8 +30,8 @@ export function AuthGuard({ children }: { children: ReactNode }) {
     if (status === "idle" || status === "loading") {
         return <div className="grid h-dvh place-items-center bg-background"><Spin size="large" /></div>;
     }
-    if (!user) return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />;
-    if (user.mustChangePassword && location.pathname !== "/change-password") return <Navigate to="/change-password" replace />;
+    if (!user) return <Navigate to="/login" replace state={{ from }} />;
+    if (user.mustChangePassword && location.pathname !== "/change-password") return <Navigate to="/change-password" replace state={{ from }} />;
     return children;
 }
 

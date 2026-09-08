@@ -44,6 +44,8 @@ export type CanvasNodeText = {
     status: CanvasNodeStatus;
     errorDetails?: string;
     content: string;
+    conversationId?: string;
+    textRequestId?: string;
 };
 
 export type CanvasNodeMetadata = {

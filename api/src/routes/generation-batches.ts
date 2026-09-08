@@ -32,6 +32,19 @@ const createBody = z.object({
 
 import { config } from "../config.js";
 
+class ActiveTaskLimitError extends Error {}
+
+async function checkUserTaskCapacity(tx: Parameters<Parameters<typeof db.transaction>[0]>[0], userId: string, count: number) {
+  const maxActiveTasks = 50;
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"image-capacity:" + userId}::text, 0))`);
+  const [row] = await tx.select({ count: sql<number>`count(*)::int` }).from(generationTasks)
+    .where(and(eq(generationTasks.userId, userId), inArray(generationTasks.status, ["queued", "running"])));
+  const activeCount = Number(row?.count ?? 0);
+  if (activeCount + count > maxActiveTasks) {
+    throw new ActiveTaskLimitError(`您当前已有 ${activeCount} 个任务排队或运行中，超过人均并发上限 (${maxActiveTasks})，请等待当前任务完成后再提交`);
+  }
+}
+
 function publicTask(task: typeof generationTasks.$inferSelect, media?: typeof mediaObjects.$inferSelect, isSaved?: boolean) {
   return {
     id: task.id,
@@ -106,25 +119,6 @@ export async function generationBatchRoutes(app: FastifyInstance) {
     if (!user) return;
     const body = createBody.parse(request.body);
 
-    // 限制单用户活跃任务总数（排队中 + 运行中），防止单一用户刷量占满全局队列
-    const MAX_USER_ACTIVE_TASKS = 50;
-    const [activeRow] = await db
-      .select({ count: sql`count(*)::int` })
-      .from(generationTasks)
-      .where(
-        and(
-          eq(generationTasks.userId, user.id),
-          inArray(generationTasks.status, ["queued", "running"]),
-        ),
-      );
-    const activeCount = Number(activeRow?.count ?? 0);
-    if (activeCount + body.count > MAX_USER_ACTIVE_TASKS) {
-      return reply.code(429).send({
-        error: "too_many_active_tasks",
-        message: `您当前已有 ${activeCount} 个任务排队或运行中，超过人均并发上限 (${MAX_USER_ACTIVE_TASKS})，请等待当前任务完成后再提交`,
-      });
-    }
-
     const [model] = await db
       .select()
       .from(models)
@@ -165,6 +159,7 @@ export async function generationBatchRoutes(app: FastifyInstance) {
     let result;
     try {
       result = await db.transaction(async (tx) => {
+        await checkUserTaskCapacity(tx, user.id, body.count);
         const [batch] = await tx
           .insert(generationBatches)
           .values({
@@ -206,6 +201,7 @@ export async function generationBatchRoutes(app: FastifyInstance) {
         return { batch: batch!, tasks };
       });
     } catch (error) {
+      if (error instanceof ActiveTaskLimitError) return reply.code(429).send({ error: "too_many_active_tasks", message: error.message });
       if (error instanceof Error && error.message === "MEDIA_UNAVAILABLE") {
         return reply.code(400).send({ error: "invalid_media", message: "参考图片已不可用" });
       }
@@ -301,7 +297,7 @@ export async function generationBatchRoutes(app: FastifyInstance) {
     if (!user) return;
     const { id } = paramsSchema.parse(request.params);
     const deletion = await db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${id}::text, 0))`);
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${id}::uuid::text, 0))`);
       const [batch] = await tx
         .select({ id: generationBatches.id })
         .from(generationBatches)
@@ -364,21 +360,28 @@ export async function generationBatchRoutes(app: FastifyInstance) {
     const user = await authenticate(request, reply);
     if (!user) return;
     const { taskId } = taskParams.parse(request.params);
-    const task = await db.transaction(async (tx) => {
-      const [candidate] = await tx
-        .select({ batchId: generationTasks.batchId })
-        .from(generationTasks)
-        .where(and(eq(generationTasks.id, taskId), eq(generationTasks.userId, user.id)))
-        .limit(1);
-      if (!candidate) return undefined;
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${candidate.batchId}::text, 0))`);
-      const [retried] = await tx
-        .update(generationTasks)
-        .set({ status: "queued", queuedAt: new Date(), startedAt: null, finishedAt: null, errorCode: null, errorMessage: null })
-        .where(and(eq(generationTasks.id, taskId), eq(generationTasks.userId, user.id), eq(generationTasks.status, "failed")))
-        .returning();
-      return retried;
-    });
+    let task;
+    try {
+      task = await db.transaction(async (tx) => {
+        await checkUserTaskCapacity(tx, user.id, 1);
+        const [candidate] = await tx
+          .select({ batchId: generationTasks.batchId })
+          .from(generationTasks)
+          .where(and(eq(generationTasks.id, taskId), eq(generationTasks.userId, user.id)))
+          .limit(1);
+        if (!candidate) return undefined;
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${candidate.batchId}::text, 0))`);
+        const [retried] = await tx
+          .update(generationTasks)
+          .set({ status: "queued", queuedAt: new Date(), startedAt: null, finishedAt: null, errorCode: null, errorMessage: null })
+          .where(and(eq(generationTasks.id, taskId), eq(generationTasks.userId, user.id), eq(generationTasks.status, "failed")))
+          .returning();
+        return retried;
+      });
+    } catch (error) {
+      if (error instanceof ActiveTaskLimitError) return reply.code(429).send({ error: "too_many_active_tasks", message: error.message });
+      throw error;
+    }
     if (!task) return reply.code(409).send({ error: "not_retryable", message: "任务不存在或当前不可重试" });
     if (!(await enqueueOrFail(task.id))) {
       return reply.code(503).send({ error: "queue_unavailable", message: "任务队列暂时不可用" });

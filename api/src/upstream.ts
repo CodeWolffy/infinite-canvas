@@ -1,5 +1,7 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { lookup } from "node:dns";
+import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { BlockList, isIP, type LookupFunction } from "node:net";
 import { fileTypeFromBuffer } from "file-type";
 import type { ChannelCandidate } from "./channel-scheduler.js";
 import { UpstreamError } from "./channel-scheduler.js";
@@ -82,30 +84,62 @@ function supportsGeminiImageSize(model: string) {
   return value.includes("gemini-3") || value.includes("3.1") || value.includes("3-pro") || value.includes("nano-banana");
 }
 
-function upstreamMessage(message: string) {
+function upstreamMessage(message: string, apiKey?: string) {
+  const redact = (text: string) => apiKey
+    ? text.replaceAll(JSON.stringify(apiKey).slice(1, -1), "[REDACTED]").replaceAll(apiKey, "[REDACTED]")
+    : text;
   try {
     const value = JSON.parse(message) as { error?: { message?: unknown } | unknown; message?: unknown };
-    const error = value.error;
+    const error = value?.error;
     const nested = error && typeof error === "object" ? (error as { message?: unknown }).message : undefined;
-    const text = nested ?? value.message;
-    if (typeof text === "string" && text.trim()) return text.trim().slice(0, 1000);
+    const text = nested ?? value?.message;
+    if (typeof text === "string" && text.trim()) return redact(text).trim().slice(0, 1000);
+    message = JSON.stringify(value);
   } catch {
     // Keep plain-text upstream responses as-is.
   }
-  return message.trim().replace(/\s+/g, " ").slice(0, 1000);
+  return redact(message).slice(0, 2000).trim().replace(/\s+/g, " ").slice(0, 1000);
 }
 
-function classifyHttp(status: number, message: string) {
-  const detail = upstreamMessage(message);
-  const lower = `${message} ${detail}`.toLowerCase();
+const contentPolicyReasons = new Set(["SAFETY", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION", "CONTENT_POLICY_VIOLATION", "CONTENT_FILTER", "MODERATION_BLOCKED"]);
+
+function hasContentPolicyRefusal(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as {
+    error?: { code?: unknown; type?: unknown };
+    promptFeedback?: { blockReason?: unknown };
+    candidates?: Array<{ finishReason?: string }>;
+    choices?: Array<{ finish_reason?: string; message?: { refusal?: unknown } }>;
+  };
+  const blockReason = payload.promptFeedback?.blockReason;
+  return [payload.error?.code, payload.error?.type].some((code) => typeof code === "string" && contentPolicyReasons.has(code.toUpperCase()))
+    || (typeof blockReason === "string" && Boolean(blockReason) && blockReason !== "BLOCK_REASON_UNSPECIFIED")
+    || (Array.isArray(payload.candidates) && payload.candidates.some((candidate) => candidate && contentPolicyReasons.has(candidate.finishReason || "")))
+    || (Array.isArray(payload.choices) && payload.choices.some((choice) => choice?.finish_reason === "content_filter" || (typeof choice?.message?.refusal === "string" && Boolean(choice.message.refusal.trim()))));
+}
+
+function contentPolicyError(status: number) {
+  return new UpstreamError("内容审核拒绝：上游判定提示词或参考图不安全，请修改后重试", "content_policy", status, "never");
+}
+
+function classifyHttp(status: number, message: string, apiKey?: string) {
+  const detail = upstreamMessage(message, apiKey);
+  const lower = detail.toLowerCase();
+  let structuredRefusal = false;
+  try {
+    structuredRefusal = hasContentPolicyRefusal(JSON.parse(message));
+  } catch {
+    // Plain-text errors are classified by their explicit refusal wording below.
+  }
   const contentPolicy =
     status === 451 ||
-    (lower.includes("content") && (lower.includes("policy") || lower.includes("safety") || lower.includes("moderation"))) ||
+    structuredRefusal ||
+    (/content[ _-](?:policy|safety|moderation)|safety system/.test(lower) && /\b(?:violation|unsafe|rejected|rejection|blocked|refused)\b/.test(lower)) ||
     lower.includes("prompt is considered unsafe") ||
     lower.includes("prompt considered unsafe") ||
     lower.includes("cannot be used to generate content");
   if (contentPolicy) {
-    return new UpstreamError("内容审核拒绝：上游判定提示词或参考图不安全，请修改后重试", "content_policy", status, "never");
+    return contentPolicyError(status);
   }
   if (status === 429 || status >= 500 || status === 401 || status === 403) {
     return new UpstreamError(`上游返回 HTTP ${status}${detail ? `：${detail}` : ""}`, `http_${status}`, status, "always");
@@ -122,10 +156,11 @@ async function upstreamJson(candidate: ChannelCandidate, url: string, init: Requ
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
     if (!response.ok) {
-      const message = (await response.text()).slice(0, 2000);
-      throw classifyHttp(response.status, message);
+      throw classifyHttp(response.status, await response.text(), candidate.apiKey);
     }
-    return await response.json();
+    const payload = await response.json();
+    if (hasContentPolicyRefusal(payload)) throw contentPolicyError(response.status);
+    return payload;
   } catch (error) {
     if (error instanceof UpstreamError) throw error;
     if (error instanceof SyntaxError) throw new UpstreamError("上游响应不是有效 JSON", "invalid_response", undefined, "once");
@@ -193,86 +228,81 @@ export async function readStreamWithLimit(
   }
 }
 
-/** 私网、回环、链路本地（含云元数据 169.254.169.254）、CGNAT 与组播地址一律视为不可下载。 */
-function isBlockedAddress(address: string) {
-  if (isIP(address) === 6) {
-    const value = address.toLowerCase();
-    const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mapped) return isBlockedAddress(mapped[1]!);
-    if (value === "::" || value === "::1") return true;
-    const head = Number.parseInt(value.split(":")[0] || "0", 16);
-    return (head & 0xfe00) === 0xfc00 || (head & 0xffc0) === 0xfe80;
-  }
-  const parts = address.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
-  const [a, b] = parts as [number, number, number, number];
-  if (a === 0 || a === 10 || a === 127 || a >= 224) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 198 && (b === 18 || b === 19)) return true;
-  return false;
+const blockedImageAddresses = new BlockList();
+for (const [address, prefix] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["127.0.0.0", 8], ["169.254.0.0", 16],
+  ["172.16.0.0", 12], ["192.168.0.0", 16], ["100.64.0.0", 10], ["198.18.0.0", 15], ["224.0.0.0", 3],
+] as const) blockedImageAddresses.addSubnet(address, prefix, "ipv4");
+blockedImageAddresses.addAddress("::", "ipv6");
+blockedImageAddresses.addAddress("::1", "ipv6");
+for (const [address, prefix] of [["fc00::", 7], ["fe80::", 10], ["ff00::", 8]] as const) {
+  blockedImageAddresses.addSubnet(address, prefix, "ipv6");
 }
 
-async function assertDownloadableTarget(target: URL) {
-  if (target.protocol !== "https:" && target.protocol !== "http:") {
-    throw new UpstreamError("生成图片地址协议不受支持", "invalid_image_url", undefined, "never");
+function isBlockedAddress(address: string) {
+  const family = isIP(address);
+  return !family || blockedImageAddresses.check(address, family === 6 ? "ipv6" : "ipv4");
+}
+
+function blockedImageHost() {
+  return new UpstreamError("生成图片地址指向内网，已拒绝下载", "blocked_image_host", undefined, "never");
+}
+
+// Validate the addresses passed to the socket so DNS cannot change between validation and connection.
+const lookupImageHost: LookupFunction = (hostname, options, callback) => {
+  lookup(hostname, { ...options, all: true }, (error, addresses) => {
+    if (error) return callback(error, []);
+    if (!addresses.length || (!config.ALLOW_PRIVATE_IMAGE_HOSTS && addresses.some(({ address }) => isBlockedAddress(address)))) {
+      return callback(blockedImageHost(), []);
+    }
+    callback(null, options.all ? addresses : addresses[0]!.address, addresses[0]!.family);
+  });
+};
+
+function requestImage(target: URL, signal: AbortSignal) {
+  if ((target.protocol !== "https:" && target.protocol !== "http:") || target.username || target.password) {
+    throw new UpstreamError("生成图片地址协议或凭据不受支持", "invalid_image_url", undefined, "never");
   }
-  if (config.ALLOW_PRIVATE_IMAGE_HOSTS) return;
   const hostname = target.hostname.replace(/^\[|\]$/g, "");
-  const addresses = isIP(hostname)
-    ? [hostname]
-    : (await lookup(hostname, { all: true }).catch(() => [])).map((item) => item.address);
-  if (!addresses.length || addresses.some(isBlockedAddress)) {
-    throw new UpstreamError("生成图片地址指向内网，已拒绝下载", "blocked_image_host", undefined, "never");
-  }
+  if (!config.ALLOW_PRIVATE_IMAGE_HOSTS && isIP(hostname) && isBlockedAddress(hostname)) throw blockedImageHost();
+  return new Promise<IncomingMessage>((resolve, reject) => {
+    const request = (target.protocol === "https:" ? httpsRequest : httpRequest)(target, {
+      signal,
+      lookup: lookupImageHost,
+      headers: { "Accept-Encoding": "identity" },
+    }, resolve);
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 export async function downloadImage(url: string) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120000);
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let response: IncomingMessage | undefined;
   try {
     // 手动跟随跳转并逐跳校验，避免 302 指向内网绕过主机检查。
     let target = new URL(url);
-    let response: Response | undefined;
     for (let hop = 0; hop < 4 && !response; hop += 1) {
-      await assertDownloadableTarget(target);
-      const hopResponse = await fetch(target, { signal: controller.signal, redirect: "manual" });
-      const location = hopResponse.status >= 300 && hopResponse.status < 400 ? hopResponse.headers.get("location") : null;
+      const hopResponse = await requestImage(target, controller.signal);
+      const status = hopResponse.statusCode ?? 0;
+      const location = status >= 300 && status < 400 ? hopResponse.headers.location : undefined;
       if (!location) {
         response = hopResponse;
         break;
       }
-      await hopResponse.body?.cancel().catch(() => undefined);
+      hopResponse.destroy();
       target = new URL(location, target);
     }
     if (!response) throw new UpstreamError("生成图片跳转次数过多", "image_download", undefined, "once");
-    if (!response.ok || !response.body) throw new UpstreamError("生成图片下载失败", "image_download", response.status, "once");
-    const length = Number(response.headers.get("content-length") ?? 0);
+    const status = response.statusCode ?? 0;
+    if (status < 200 || status >= 300) throw new UpstreamError("生成图片下载失败", "image_download", status, "once");
+    const length = Number(response.headers["content-length"] ?? 0);
     if (length > config.MAX_GENERATED_BYTES) throw new UpstreamError(`生成图片超过 ${maxGeneratedMb}MB`, "image_too_large", undefined, "never");
-    reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.length;
-      if (total > config.MAX_GENERATED_BYTES) {
-        await reader.cancel("image_too_large").catch(() => undefined);
-        throw new UpstreamError(`生成图片超过 ${maxGeneratedMb}MB`, "image_too_large", undefined, "never");
-      }
-      chunks.push(value);
-    }
-    return Buffer.concat(chunks, total);
-  } catch (error) {
-    if (reader) {
-      await reader.cancel("download_failed").catch(() => undefined);
-    }
-    throw error;
+    return await readStreamWithLimit(response, config.MAX_GENERATED_BYTES, `生成图片超过 ${maxGeneratedMb}MB`, "image_too_large");
   } finally {
     clearTimeout(timeout);
+    response?.destroy();
   }
 }
 
@@ -398,8 +428,8 @@ export async function generateText(
         messages: upstreamMessages,
         stream: false,
       }),
-    })) as { choices?: Array<{ message?: { content?: unknown } }> };
-    const content = value.choices?.[0]?.message?.content;
+    })) as { choices?: Array<{ message?: { content?: unknown } }> } | null;
+    const content = Array.isArray(value?.choices) ? value.choices[0]?.message?.content : undefined;
     if (typeof content !== "string") throw new UpstreamError("上游未返回文本", "invalid_response", undefined, "once");
     return content;
   }
@@ -425,8 +455,9 @@ export async function generateText(
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
       generationConfig: textParameters,
     }),
-  })) as { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> };
-  const content = value.candidates?.[0]?.content?.parts?.map((part) => part.text).filter((text): text is string => typeof text === "string").join("");
+  })) as { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> } | null;
+  const parts = Array.isArray(value?.candidates) ? value.candidates[0]?.content?.parts : undefined;
+  const content = Array.isArray(parts) ? parts.map((part) => part?.text).filter((text): text is string => typeof text === "string").join("") : "";
   if (!content) throw new UpstreamError("上游未返回文本", "invalid_response", undefined, "once");
   return content;
 }

@@ -62,7 +62,7 @@ export default function UserCenterLayout() {
                         onClick={() => void logout().then(() => navigate("/login", { replace: true }))}
                     >
                         <LogOut className="size-4 shrink-0" />
-                        <span className="truncate">{t("auth.logout")}</span>
+                        <span className="truncate">{t("userCenter.logout")}</span>
                     </button>
                 </div>
             </aside>
@@ -104,7 +104,7 @@ export default function UserCenterLayout() {
                         <button
                             type="button"
                             className="inline-flex size-9 items-center justify-center rounded-lg text-stone-500 transition hover:bg-black/5 hover:text-stone-950 md:hidden dark:hover:bg-white/10 dark:hover:text-stone-100"
-                            title={t("auth.logout")}
+                            title={t("userCenter.logout")}
                             onClick={() => void logout().then(() => navigate("/login", { replace: true }))}
                         >
                             <LogOut className="size-4" />

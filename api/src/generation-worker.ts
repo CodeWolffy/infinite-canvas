@@ -84,6 +84,7 @@ async function processTask(taskId: string) {
 
   let activeRequestLogId: string | undefined;
   let activeAttemptId: string | undefined;
+  const failedAttemptWrites: Array<() => PromiseLike<unknown>> = [];
   try {
     const references = await acquireReferences(task.batchId);
     try {
@@ -129,7 +130,7 @@ async function processTask(taskId: string) {
         } catch (error) {
           const upstream = error instanceof UpstreamError ? error : new UpstreamError("上游请求失败", "unknown", undefined, "once");
           const finishedAt = new Date();
-          await db
+          const recordFailure = () => db
             .update(generationAttempts)
             .set({
               status: "failed",
@@ -140,6 +141,11 @@ async function processTask(taskId: string) {
               durationMs: finishedAt.getTime() - startedAt.getTime(),
             })
             .where(eq(generationAttempts.id, attempt!.id));
+          try {
+            await recordFailure();
+          } catch {
+            failedAttemptWrites.push(recordFailure);
+          }
           await finishRequestLog(requestLogId, upstream);
           throw upstream;
         }
@@ -210,6 +216,15 @@ async function processTask(taskId: string) {
     }
     if (activeRequestLogId) {
       await finishRequestLog(activeRequestLogId, upstream);
+    }
+  } finally {
+    // 任务收口时补记未完成的尝试，记录失败不得改写上游结果或触发额外生成。
+    for (const recordFailure of failedAttemptWrites) {
+      try {
+        await recordFailure();
+      } catch {
+        console.warn("[GenerationWorker] 尝试记录未能完成写入", { taskId: task.id });
+      }
     }
   }
 }

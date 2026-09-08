@@ -9,6 +9,7 @@ import { config } from "../config.js";
 import { db } from "../db/client.js";
 import {
   assets,
+  canvasProjectHistoryMedia,
   canvasProjectMedia,
   canvasProjects,
   generatedImages,
@@ -110,6 +111,10 @@ export async function mediaRoutes(app: FastifyInstance) {
           inner join canvas_projects cp on cp.id = cpm.project_id
           where cpm.media_id = ${media.id}::uuid and cp.user_id = ${user.id}::uuid
         union all
+        select 1 from canvas_project_history_media hm
+          inner join canvas_project_history h on h.id = hm.history_id
+          where hm.media_id = ${media.id}::uuid and h.user_id = ${user.id}::uuid
+        union all
         select 1 from generation_batch_media gbm
           inner join generation_batches gb on gb.id = gbm.batch_id
           where gbm.media_id = ${media.id}::uuid and gb.user_id = ${user.id}::uuid
@@ -126,6 +131,9 @@ export async function mediaRoutes(app: FastifyInstance) {
     }
 
     const etag = `"${media.sha256}"`;
+    reply.header("ETag", etag);
+    reply.header("Cache-Control", "private, no-cache");
+    reply.header("Vary", "Origin, Cookie");
     const ifNoneMatch = request.headers["if-none-match"];
     if (ifNoneMatch === etag || ifNoneMatch === media.sha256) {
       return reply.code(304).send();
@@ -134,8 +142,6 @@ export async function mediaRoutes(app: FastifyInstance) {
     const stream = await minio.getObject(media.bucket, media.objectKey);
     reply.header("Content-Type", media.mimeType);
     reply.header("Content-Length", String(media.byteSize));
-    reply.header("ETag", etag);
-    reply.header("Cache-Control", "private, max-age=31536000, immutable");
     return reply.send(stream);
   });
 
@@ -150,10 +156,11 @@ export async function mediaRoutes(app: FastifyInstance) {
     if (media.ownerId !== user.id && user.role !== "admin") {
       return reply.code(403).send({ error: "forbidden", message: "无权删除该文件" });
     }
-    const [[assetReference], [generatedReference], [canvasReference], [batchReference], [messageReference]] = await Promise.all([
+    const [[assetReference], [generatedReference], [canvasReference], [historyReference], [batchReference], [messageReference]] = await Promise.all([
       db.select({ id: assets.id }).from(assets).where(eq(assets.mediaId, id)).limit(1),
       db.select({ id: generatedImages.id }).from(generatedImages).where(eq(generatedImages.mediaId, id)).limit(1),
       db.select({ id: canvasProjectMedia.projectId }).from(canvasProjectMedia).where(eq(canvasProjectMedia.mediaId, id)).limit(1),
+      db.select({ id: canvasProjectHistoryMedia.historyId }).from(canvasProjectHistoryMedia).where(eq(canvasProjectHistoryMedia.mediaId, id)).limit(1),
       db.select({ id: generationBatchMedia.batchId }).from(generationBatchMedia).where(eq(generationBatchMedia.mediaId, id)).limit(1),
       db.select({ id: messageMedia.messageId }).from(messageMedia).where(eq(messageMedia.mediaId, id)).limit(1),
     ]);
@@ -162,6 +169,7 @@ export async function mediaRoutes(app: FastifyInstance) {
       assetReference ||
       generatedReference ||
       canvasReference ||
+      historyReference ||
       batchReference ||
       messageReference
     ) {

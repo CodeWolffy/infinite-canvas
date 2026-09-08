@@ -221,6 +221,18 @@ export const canvasProjectMedia = pgTable(
   ],
 );
 
+export const canvasProjectHistoryMedia = pgTable(
+  "canvas_project_history_media",
+  {
+    historyId: uuid("history_id").notNull().references(() => canvasProjectHistory.id, { onDelete: "cascade" }),
+    mediaId: uuid("media_id").notNull().references(() => mediaObjects.id, { onDelete: "restrict" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.historyId, table.mediaId] }),
+    index("canvas_project_history_media_media_idx").on(table.mediaId),
+  ],
+);
+
 export const generationBatches = pgTable(
   "generation_batches",
   {

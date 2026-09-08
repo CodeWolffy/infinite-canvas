@@ -420,6 +420,7 @@ export default {
     },
     userCenter: {
         title: "个人中心",
+        logout: "退出登录",
         navGenerations: "生图历史",
         navStats: "用量统计",
         navLogs: "调用日志",

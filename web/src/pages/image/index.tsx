@@ -12,7 +12,7 @@ import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/a
 import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { createZip } from "@/lib/zip";
-import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelOptionName, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
@@ -21,6 +21,7 @@ import { platformImageParameters, resolvePlatformImageModelId } from "@/services
 import { uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import i18n from "@/i18n";
 
@@ -86,6 +87,7 @@ export default function ImagePage() {
     const [models, setModels] = useState<PublicModel[]>([]);
     const modelsRef = useRef<PublicModel[]>([]);
     const [modelId, setModelId] = useState(remixState?.modelId || "");
+    const [initialized, setInitialized] = useState(false);
     const [prompt, setPrompt] = useState(remixState?.prompt || "");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
@@ -131,7 +133,10 @@ export default function ImagePage() {
     }, [previewLog]);
 
     useEffect(() => {
+        const sessionVersion = useUserStore.getState().sessionVersion;
+        let disposed = false;
         void Promise.all([getPublicModels(), listGenerationBatches(), getGenerationPreferences()]).then(async ([availableModels, batchPage, preferences]) => {
+            if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
             const batches = batchPage.batches;
             preferencesRef.current = preferences;
             const imageModels = availableModels.filter((item) => item.capability === "image");
@@ -146,10 +151,17 @@ export default function ImagePage() {
             const activeBatches = batches.filter((batch) => batch.summary.activeCount > 0);
             if (!activeBatches.length) return;
             setActiveBatchIds(activeBatches.map((b) => b.id));
-            const applied = applyDetail(await getGenerationBatch(activeBatches[0]!.id));
+            const detail = await getGenerationBatch(activeBatches[0]!.id);
+            if (disposed || useUserStore.getState().sessionVersion !== sessionVersion) return;
+            const applied = applyDetail(detail);
             setPreviewLog(applied.log);
             setResults(applied.results);
-        }).catch((error) => message.error(error instanceof Error ? error.message : "生成记录加载失败"));
+        }).catch((error) => {
+            if (!disposed && useUserStore.getState().sessionVersion === sessionVersion) message.error(error instanceof Error ? error.message : "生成记录加载失败");
+        }).finally(() => {
+            if (!disposed && useUserStore.getState().sessionVersion === sessionVersion) setInitialized(true);
+        });
+        return () => { disposed = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -225,6 +237,7 @@ export default function ImagePage() {
     pollRef.current = () => void pollActiveBatches();
 
     const addReferences = async (files?: FileList | null) => {
+        const sessionVersion = useUserStore.getState().sessionVersion;
         try {
             const imageFiles = Array.from(files || []).filter((file) => SUPPORTED_IMAGE_TYPES.has(file.type));
             const nextReferences = await Promise.all(
@@ -233,16 +246,20 @@ export default function ImagePage() {
                     return { id: nanoid(), name: file.name, type: media.mimeType, dataUrl: media.url, storageKey: media.id };
                 }),
             );
+            assertCurrentSession(sessionVersion);
             setReferences((value) => [...value, ...nextReferences]);
         } catch (error) {
+            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             message.error(error instanceof Error ? error.message : "参考图上传失败");
         }
     };
 
     const addReferencesFromClipboard = async () => {
+        const sessionVersion = useUserStore.getState().sessionVersion;
         try {
             const items = await navigator.clipboard.read();
             const blobs = await Promise.all(items.flatMap((item) => item.types.filter((type) => SUPPORTED_IMAGE_TYPES.has(type)).map((type) => item.getType(type))));
+            assertCurrentSession(sessionVersion);
             if (!blobs.length) {
                 message.error(t("imageWorkbench.clipboardEmpty"));
                 return;
@@ -253,14 +270,17 @@ export default function ImagePage() {
                     return { id: nanoid(), name: media.originalName, type: media.mimeType, dataUrl: media.url, storageKey: media.id };
                 }),
             );
+            assertCurrentSession(sessionVersion);
             setReferences((value) => [...value, ...nextReferences]);
             message.success(t("imageWorkbench.clipboardAdded", { count: nextReferences.length }));
         } catch (error) {
+            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             message.error(error instanceof Error ? error.message : t("imageWorkbench.clipboardEmpty"));
         }
     };
 
     const generate = async () => {
+        const sessionVersion = useUserStore.getState().sessionVersion;
         const agentTaskId = agentTaskIdRef.current;
         agentTaskIdRef.current = undefined;
         const text = prompt.trim();
@@ -277,7 +297,10 @@ export default function ImagePage() {
         try {
             ensureNotifyPermission();
             const referenceMediaIds = references.map((item) => item.storageKey).filter((id): id is string => Boolean(id));
-            const created = await createGenerationBatch({ modelId: await resolvePlatformImageModelId(modelId), prompt: text, count: generationCount, parameters: generationParameters(effectiveConfig), referenceMediaIds });
+            const resolvedModelId = await resolvePlatformImageModelId(modelId);
+            assertCurrentSession(sessionVersion);
+            const created = await createGenerationBatch({ modelId: resolvedModelId, prompt: text, count: generationCount, parameters: generationParameters(effectiveConfig), referenceMediaIds });
+            assertCurrentSession(sessionVersion);
             const applied = applyDetail({ ...created, referenceMediaIds });
             setPreviewLog(applied.log);
             setResults(applied.results);
@@ -286,6 +309,7 @@ export default function ImagePage() {
                 updateAgentTask(agentTaskId, { status: "running", error: undefined });
             }
         } catch (error) {
+            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             const detail = error instanceof Error ? error.message : t("workbench.generationFailed");
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: detail });
             message.error(detail);
@@ -294,15 +318,20 @@ export default function ImagePage() {
 
     // Handle image-generation commands from the Agent panel by setting the prompt and optionally starting generation.
     useEffect(() => {
-        if (!imageCommand || imageCommand.nonce === processedCommandRef.current) return;
+        if (!initialized || !imageCommand || imageCommand.nonce === processedCommandRef.current) return;
         processedCommandRef.current = imageCommand.nonce;
         clearImageCommand();
+        if (imageCommand.config?.model) setModelId(modelOptionName(imageCommand.config.model));
+        for (const key of ["quality", "size", "count"] as const) {
+            const value = imageCommand.config?.[key];
+            if (typeof value === "string") updateConfig(key, value);
+        }
         if (typeof imageCommand.prompt === "string") setPrompt(imageCommand.prompt);
         if (imageCommand.run) {
             agentTaskIdRef.current = imageCommand.taskId;
             setAutoRunToken((value) => value + 1);
         }
-    }, [imageCommand, clearImageCommand]);
+    }, [imageCommand, clearImageCommand, initialized, updateConfig]);
 
     useEffect(() => {
         if (!autoRunToken) return;
@@ -332,8 +361,10 @@ export default function ImagePage() {
     };
 
     const saveResultToAssets = async (image: GeneratedImage, index: number) => {
+        const sessionVersion = useUserStore.getState().sessionVersion;
         try {
             const stored = await uploadImage(image.dataUrl);
+            assertCurrentSession(sessionVersion);
             await addAsset({
                 kind: "image",
                 title: t("imageWorkbench.resultTitle", { count: index + 1 }),
@@ -343,13 +374,16 @@ export default function ImagePage() {
                 data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
                 metadata: { source: "image-page", prompt },
             });
+            assertCurrentSession(sessionVersion);
             message.success(t("common.addedToAssets"));
         } catch {
+            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             message.error(t("common.requestFailed") || "加入素材失败，请重试");
         }
     };
 
     const insertPickedAsset = async (payload: InsertAssetPayload) => {
+        const sessionVersion = useUserStore.getState().sessionVersion;
         if (payload.kind === "text") {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
@@ -357,7 +391,10 @@ export default function ImagePage() {
             if (existingId) {
                 setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: "image", dataUrl: `/api/media/${existingId}`, storageKey: existingId }]);
             } else {
-                const media = await uploadGenerationMedia(await (await fetch(payload.dataUrl)).blob(), `${payload.title}.png`);
+                const blob = await (await fetch(payload.dataUrl)).blob();
+                assertCurrentSession(sessionVersion);
+                const media = await uploadGenerationMedia(blob, `${payload.title}.png`);
+                assertCurrentSession(sessionVersion);
                 setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: media.mimeType, dataUrl: media.url, storageKey: media.id }]);
             }
         } else {

@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull, isNull, lte, or } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lt, lte, or } from "drizzle-orm";
 import { decryptSecret } from "./crypto.js";
 import { db } from "./db/client.js";
 import { channels, modelChannels } from "./db/schema.js";
@@ -28,7 +28,7 @@ export class UpstreamError extends Error {
   }
 }
 
-export async function hasChannelCandidates(modelId: string) {
+export async function hasChannelCandidates(modelId: string, channelId?: string) {
   const [row] = await db
     .select({ id: channels.id })
     .from(modelChannels)
@@ -36,6 +36,7 @@ export async function hasChannelCandidates(modelId: string) {
     .where(
       and(
         eq(modelChannels.modelId, modelId),
+        channelId ? eq(channels.id, channelId) : undefined,
         eq(modelChannels.enabled, true),
         eq(channels.status, "active"),
         or(isNull(channels.cooldownUntil), lte(channels.cooldownUntil, new Date())),
@@ -172,8 +173,9 @@ export async function withChannelSlot<T>(candidate: ChannelCandidate, action: ()
   }
 }
 
-export async function markChannelResult(candidate: ChannelCandidate, error?: UpstreamError) {
+export async function markChannelResult(candidate: ChannelCandidate, error?: UpstreamError, startedAt = new Date()) {
   const now = new Date();
+  const onWriteFailure = () => console.warn("[ChannelScheduler] 渠道健康状态写入失败", { channelId: candidate.channelId, result: error?.category ?? "success" });
   if (!error) {
     // 仅在渠道先前处于异常（有错误码或处于冷却中）需要恢复时落盘更新，
     // 避免高并发健康调用下所有 worker 在同一行 channels 上加排他行锁排队等待。
@@ -184,18 +186,20 @@ export async function markChannelResult(candidate: ChannelCandidate, error?: Ups
         and(
           eq(channels.id, candidate.channelId),
           or(isNotNull(channels.lastErrorCode), isNotNull(channels.cooldownUntil)),
+          or(isNull(channels.lastFailureAt), lt(channels.lastFailureAt, startedAt)),
         ),
-      );
+      ).catch(onWriteFailure);
     return;
   }
 
-  const isAuthError = error.httpStatus === 401 || error.httpStatus === 403;
-  const isChannelFault =
+  const isRequestRejection = error.category === "content_policy" || error.category === "invalid_request";
+  const isAuthError = !isRequestRejection && (error.httpStatus === 401 || error.httpStatus === 403);
+  const isChannelFault = !isRequestRejection && (
     error.category === "timeout" ||
     error.category === "network" ||
     error.category === "channel_busy" ||
     error.httpStatus === 429 ||
-    (typeof error.httpStatus === "number" && error.httpStatus >= 500);
+    (typeof error.httpStatus === "number" && error.httpStatus >= 500));
 
   const configuredCooldownMs = Math.max(0, (candidate.cooldownSeconds ?? 120)) * 1000;
   // 鉴权错误通常持续较长（如额度耗尽或密钥失效），保留至少 5 分钟或管理员配置的更长冷却期
@@ -213,7 +217,8 @@ export async function markChannelResult(candidate: ChannelCandidate, error?: Ups
       ...(cooldownMs > 0 ? { cooldownUntil: new Date(now.getTime() + cooldownMs) } : {}),
       updatedAt: now,
     })
-    .where(eq(channels.id, candidate.channelId));
+    .where(eq(channels.id, candidate.channelId))
+    .catch(onWriteFailure);
 }
 
 export async function runWithFailover<T>(
@@ -225,19 +230,33 @@ export async function runWithFailover<T>(
   let ambiguousRetryPending = false;
   let ambiguousSourceChannelId: string | undefined;
   let lastError: UpstreamError | undefined;
+  let attempt = 0;
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index]!;
+    let attempted = false;
     try {
-      const result = await withChannelSlot(candidate, () => action(candidate, index + 1));
-      await markChannelResult(candidate);
-      return { result, candidate };
+      const completed = await withChannelSlot(candidate, async () => {
+        if (!(await hasChannelCandidates(modelId, candidate.channelId))) return;
+        const startedAt = new Date();
+        attempted = true;
+        try {
+          const result = await action(candidate, ++attempt);
+          await markChannelResult(candidate, undefined, startedAt);
+          return { result };
+        } catch (error) {
+          const upstream = error instanceof UpstreamError ? error : new UpstreamError("上游请求失败", "unknown", undefined, "once");
+          // Publish health before releasing the slot so queued requests see the cooldown.
+          await markChannelResult(candidate, upstream, startedAt);
+          throw upstream;
+        }
+      });
+      if (!completed) continue;
+      return { result: completed.result, candidate };
     } catch (error) {
-      const upstream =
-        error instanceof UpstreamError
-          ? error
-          : new UpstreamError("上游请求失败", "unknown", undefined, "once");
+      if (!(error instanceof UpstreamError)) throw error;
+      const upstream = error;
       lastError = upstream;
-      await markChannelResult(candidate, upstream);
+      if (!attempted) await markChannelResult(candidate, upstream);
       if (ambiguousRetryPending && candidate.channelId !== ambiguousSourceChannelId) throw upstream;
       if (upstream.failover === "never") throw upstream;
       if (upstream.failover === "once") {

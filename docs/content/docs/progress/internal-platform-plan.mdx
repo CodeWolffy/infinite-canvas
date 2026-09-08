@@ -1,11 +1,13 @@
 ---
 title: Internal Creative Platform Plan
-description: Plan for turning Infinite Canvas into a LAN-only company platform with accounts, server-side projects, object storage, channel routing, and usage analytics
+description: Plan for a company platform with accounts, server-side projects, object storage, channel routing, usage analytics, and public HTTPS access
 ---
 
 # Internal Creative Platform Plan
 
-This document records the agreed plan for adapting Infinite Canvas into an internal AI image creation platform. The existing Lovart-style canvas and creation experience should remain largely unchanged, while accounts, image generation, text conversations, canvas projects, assets, and generation history move to shared server-side storage for approximately five users on the company LAN.
+This document records the plan for adapting Infinite Canvas into a company AI image creation platform. The canvas experience remains largely unchanged while accounts, generation, text conversations, projects, assets, and history move to server-side storage for cross-device access through a public HTTPS domain.
+
+The confirmed deployment uses 1Panel for TLS and reverse proxying, with source ports closed to the Internet. Codex remains an optional integration on each user's own computer, separate from platform text channels. This replaces the original LAN-only deployment assumption.
 
 This document is the implementation baseline for the adaptation. The current implementation is pending verification; actual availability is tracked in [Pending Tests](/docs/progress/pending-test) and will move to the formal feature documentation after user confirmation.
 
@@ -23,7 +25,6 @@ This document is the implementation baseline for the adaptation. The current imp
 ## First-release exclusions
 
 - Self-registration, enterprise SSO, LDAP, or third-party login.
-- Public Internet deployment, public domains, or public HTTPS exposure.
 - Real-time collaboration, shared canvases, comments, or review workflows.
 - Trash, storage quotas, automatic retention cleanup, or migration of existing browser data.
 - UI for administrators to inspect prompts and original images, although ownership and request data will be stored for future support.
@@ -35,7 +36,7 @@ This document is the implementation baseline for the adaptation. The current imp
 Use a small TypeScript monolith rather than running a fork of New API or Sub2API. Their channel-priority, weight, model-mapping, and failover designs are useful references, but their payment, token distribution, subscription, and commercial gateway systems are outside this project's scope.
 
 ```txt
-LAN browsers
+HTTPS browsers through the 1Panel reverse proxy
     |
     v
 React frontend + Fastify API
@@ -59,10 +60,10 @@ Recommended stack:
 
 ## Network boundary
 
-- Deploy on one device inside the trusted company LAN and access it through that device's LAN IP.
-- Do not expose the application, PostgreSQL, MinIO, or 1Panel through router port forwarding or public firewall rules.
+- Access the public HTTPS domain whose certificate and reverse proxy are configured in 1Panel.
+- Requests pass through 1Panel -> Web Nginx -> API. Ports 3000/3001 are not publicly open; the API trusts only the two nearest proxy hops.
 - PostgreSQL and the MinIO API should only be reachable by application containers and the administration network.
-- Plain HTTP is accepted only within the trusted LAN. A domain plus HTTPS, VPN, or another encrypted private network is required before any public or untrusted-network access is introduced.
+- Production sessions require Secure cookies. Optional local Codex connects from the user's browser and does not expose an Agent port on the platform server.
 
 ## Accounts and permissions
 
@@ -223,7 +224,7 @@ Remove or hide regular-user channel configuration. Administrator channel setting
 
 - Administrators can create, disable, and reset accounts; first login requires a password change.
 - Users generate with published image and text models without configuring API keys.
-- Canvas projects, assets, generation history, and conversations restore on another LAN device.
+- Canvas projects, assets, generation history, and conversations restore on another device using the HTTPS domain.
 - Multi-image requests run as independent durable jobs with controlled routing and billing.
 - Jobs continue when the browser closes and results are visible after login.
 - Uploaded and generated images are stored in MinIO.
@@ -231,4 +232,4 @@ Remove or hide regular-user channel configuration. Administrator channel setting
 - Administrators can filter calls, images, estimated cost, latency, and both success-rate definitions.
 - Regular users cannot access secrets, routing settings, prices, administration analytics, or another user's private data.
 - Public assets follow creator/administrator permissions and deletion does not break existing canvas references.
-- The application, database, and object storage are available only on the trusted company LAN.
+- Only the 1Panel HTTPS entry point is publicly accessible; source ports, PostgreSQL, and MinIO remain private.

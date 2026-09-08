@@ -89,7 +89,7 @@ export default function UserStatsPage() {
                             <div>
                                 <div className="text-xs text-stone-500">{t("userCenter.cardStorage")}</div>
                                 <div className="text-2xl font-bold text-stone-950 dark:text-stone-100">
-                                    {formatBytes(stats.storage.totalBytes)}
+                                    {formatBytes(stats.storage.totalBytes) || "0 B"}
                                 </div>
                             </div>
                         </div>

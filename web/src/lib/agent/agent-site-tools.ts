@@ -4,16 +4,15 @@ import i18n from "@/i18n";
 import { fetchPrompts } from "@/services/api/prompts";
 import { uploadImage } from "@/services/image-storage";
 import { imageAspectOptions, imageQualityOptions, imageScaleOptions } from "@/components/image-settings-panel";
-import { videoResolutionOptions, videoSecondsRange, videoSizeOptions } from "@/components/video-settings-panel";
 import type { CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
-import { clampVideoSeconds } from "@/lib/media-size";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { modelOptionLabel, modelOptionName, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore } from "@/stores/use-config-store";
-import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
+import { useWorkbenchAgentStore, type WorkbenchCommand } from "@/stores/use-workbench-agent-store";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 // Execute site-level Agent tools in the browser, including canvas lists, workbench generation, prompt search, and asset operations.
-// Their data lives locally in the browser through localforage and Zustand, so this module accesses the relevant stores directly.
+// Enterprise stores synchronize business data with the platform API.
 
 export const SITE_TOOL_NAMES = [
     "canvas_list_projects",
@@ -65,9 +64,8 @@ export async function runSiteTool(name: SiteToolName, input: SiteToolInput, navi
         case "workbench_image_generate":
             return runImageWorkbench(input, navigate);
         case "workbench_video_get_config":
-            return getVideoConfig();
         case "workbench_video_generate":
-            return runVideoWorkbench(input, navigate);
+            throw new Error("企业平台仅支持图片和文本生成");
         case "prompts_search":
             return searchPrompts(input);
         case "assets_list":
@@ -161,9 +159,10 @@ function getImageConfig() {
 
 function runImageWorkbench(input: SiteToolInput, navigate: NavigateFunction) {
     const configStore = useConfigStore.getState();
-    const applied: Record<string, unknown> = {};
+    const applied: NonNullable<WorkbenchCommand["config"]> = {};
     if (typeof input.model === "string" && input.model.trim()) {
         const value = normalizeModelOptionValue(input.model, configStore.config.channels) || input.model;
+        if (!selectableModelsByCapability(configStore.config, "image").includes(value)) throw new Error("请选择平台发布的图片模型");
         configStore.updateConfig("imageModel", value);
         applied.model = value;
     }
@@ -183,73 +182,8 @@ function runImageWorkbench(input: SiteToolInput, navigate: NavigateFunction) {
     const prompt = typeof input.prompt === "string" ? input.prompt : undefined;
     const run = input.run !== false;
     navigate("/image");
-    const taskId = useWorkbenchAgentStore.getState().dispatchImage({ prompt, run });
+    const taskId = useWorkbenchAgentStore.getState().dispatchImage({ prompt, run, config: applied });
     return { ok: true, navigated: "/image", prompt, run, taskId, applied, note: siteText(run ? "imageGenerationStarted" : "imageConfigApplied") };
-}
-
-function getVideoConfig() {
-    const { config } = useConfigStore.getState();
-    const model = config.videoModel || config.model;
-    return {
-        current: {
-            model,
-            modelName: modelOptionName(model),
-            size: config.size || "1280x720",
-            seconds: config.videoSeconds || "6",
-            resolution: config.vquality || "720",
-            generateAudio: config.videoGenerateAudio !== "false",
-            watermark: config.videoWatermark === "true",
-            mode: config.videoMode === "reference" ? "reference" : "frames",
-        },
-        models: selectableModelsByCapability(config, "video").map((value) => ({ value, label: modelOptionLabel(config, value) })),
-        sizeOptions: videoSizeOptions,
-        secondsRange: videoSecondsRange,
-        resolutionOptions: videoResolutionOptions,
-        modeOptions: [
-            { value: "frames", label: i18n.t("settingsPanels.video.modes.frames") },
-            { value: "reference", label: i18n.t("settingsPanels.video.modes.reference") },
-        ],
-    };
-}
-
-function runVideoWorkbench(input: SiteToolInput, navigate: NavigateFunction) {
-    const configStore = useConfigStore.getState();
-    const applied: Record<string, unknown> = {};
-    if (typeof input.model === "string" && input.model.trim()) {
-        const value = normalizeModelOptionValue(input.model, configStore.config.channels) || input.model;
-        configStore.updateConfig("videoModel", value);
-        applied.model = value;
-    }
-    if (typeof input.size === "string" && input.size.trim()) {
-        configStore.updateConfig("size", input.size);
-        applied.size = input.size;
-    }
-    if (input.seconds != null && String(input.seconds).trim()) {
-        const seconds = clampVideoSeconds(String(input.seconds));
-        configStore.updateConfig("videoSeconds", seconds);
-        applied.seconds = seconds;
-    }
-    if (typeof input.resolution === "string" && input.resolution.trim()) {
-        configStore.updateConfig("vquality", input.resolution);
-        applied.resolution = input.resolution;
-    }
-    if (typeof input.generateAudio === "boolean") {
-        configStore.updateConfig("videoGenerateAudio", String(input.generateAudio));
-        applied.generateAudio = input.generateAudio;
-    }
-    if (typeof input.watermark === "boolean") {
-        configStore.updateConfig("videoWatermark", String(input.watermark));
-        applied.watermark = input.watermark;
-    }
-    if (input.mode === "frames" || input.mode === "reference") {
-        configStore.updateConfig("videoMode", input.mode);
-        applied.mode = input.mode;
-    }
-    const prompt = typeof input.prompt === "string" ? input.prompt : undefined;
-    const run = input.run !== false;
-    navigate("/video");
-    const taskId = useWorkbenchAgentStore.getState().dispatchVideo({ prompt, run });
-    return { ok: true, navigated: "/video", prompt, run, taskId, applied, note: siteText(run ? "videoGenerationStarted" : "videoConfigApplied") };
 }
 
 async function searchPrompts(input: SiteToolInput) {
@@ -294,6 +228,7 @@ function listAssets(input: SiteToolInput) {
 }
 
 async function addAsset(input: SiteToolInput) {
+    const sessionVersion = useUserStore.getState().sessionVersion;
     const kind = input.kind;
     const title = String(input.title || "").trim();
     if (!title) throw new Error(siteText("assetTitleRequired"));
@@ -304,7 +239,8 @@ async function addAsset(input: SiteToolInput) {
     if (kind === "text") {
         const content = String(input.content || "").trim();
         if (!content) throw new Error(siteText("textContentRequired"));
-        const id = store.addAsset({ kind: "text", title, coverUrl: "", tags, source, note, data: { content } });
+        const id = await store.addAsset({ kind: "text", title, coverUrl: "", tags, source, note, data: { content } });
+        assertCurrentSession(sessionVersion);
         return { ok: true, id, kind: "text" };
     }
     if (kind === "image") {
@@ -316,7 +252,9 @@ async function addAsset(input: SiteToolInput) {
         } catch {
             throw new Error(siteText("imageReadFailed"));
         }
-        const id = store.addAsset({ kind: "image", title, coverUrl: stored.url, tags, source, note, data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType } });
+        assertCurrentSession(sessionVersion);
+        const id = await store.addAsset({ kind: "image", title, coverUrl: stored.url, tags, source, note, data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType } });
+        assertCurrentSession(sessionVersion);
         return { ok: true, id, kind: "image" };
     }
     throw new Error(siteText("assetKindUnsupported"));

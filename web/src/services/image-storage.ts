@@ -2,6 +2,7 @@ import i18n from "@/i18n";
 import { readImageMeta } from "@/lib/image-utils";
 import { mediaUrl, readMedia, uploadMedia } from "@/services/api/media";
 import { withLocalProxy } from "@/stores/use-config-store";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 
 export type UploadedImage = {
@@ -16,11 +17,13 @@ export type UploadedImage = {
 type ImageReadOptions = { signal?: AbortSignal };
 
 export async function uploadImage(input: string | Blob, options?: ImageReadOptions): Promise<UploadedImage> {
+    const sessionVersion = useUserStore.getState().sessionVersion;
     if (options?.signal?.aborted) throw abortReason(options.signal);
     const blob = typeof input === "string" ? await fetchImageBlob(input, options) : input;
     const previewUrl = URL.createObjectURL(blob);
-    const meta = await readImageMeta(previewUrl);
-    URL.revokeObjectURL(previewUrl);
+    const meta = await readImageMeta(previewUrl).finally(() => URL.revokeObjectURL(previewUrl));
+    assertCurrentSession(sessionVersion);
+    if (options?.signal?.aborted) throw abortReason(options.signal);
     const existingId = typeof input === "string" ? input.match(/\/api\/media\/([0-9a-f-]{36})(?:\b|\/|\?|#)/i)?.[1] : undefined;
     if (existingId) {
         return { url: mediaUrl(existingId), storageKey: `image:${existingId}`, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
@@ -34,6 +37,7 @@ const IMAGE_RESPONSE_ERROR = "ImageResponseError";
 const IMAGE_TIMEOUT_ERROR = "ImageTimeoutError";
 
 async function fetchImageBlob(url: string, options?: ImageReadOptions) {
+    const sessionVersion = useUserStore.getState().sessionVersion;
     const controller = new AbortController();
     let timedOut = false;
     const abort = () => controller.abort();
@@ -46,7 +50,9 @@ async function fetchImageBlob(url: string, options?: ImageReadOptions) {
     try {
         const response = await fetch(withLocalProxy(url), { signal: controller.signal });
         if (!response.ok) throw namedError(IMAGE_RESPONSE_ERROR);
-        return await response.blob();
+        const blob = await response.blob();
+        assertCurrentSession(sessionVersion);
+        return blob;
     } catch (error) {
         if (timedOut) throw namedError(IMAGE_TIMEOUT_ERROR);
         if (options?.signal?.aborted) throw abortReason(options.signal);

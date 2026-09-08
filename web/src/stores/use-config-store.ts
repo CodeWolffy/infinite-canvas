@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
 import { listModels, type PublicModel } from "@/services/api/models";
+import { useUserStore } from "@/stores/use-user-store";
 
 export type ApiCallFormat = "openai" | "gemini";
 export type ModelCapability = "image" | "video" | "text" | "audio";
@@ -240,7 +241,9 @@ export const useConfigStore = create<ConfigStore>()(
             configTab: "channels",
             shouldPromptContinue: false,
             hydratePlatformModels: async () => {
+                const sessionVersion = useUserStore.getState().sessionVersion;
                 const models = await listModels();
+                if (useUserStore.getState().sessionVersion !== sessionVersion) return;
                 set((state) => ({ config: platformConfig(state.config, models) }));
             },
             updateConfig: (key, value) =>
@@ -269,7 +272,7 @@ export const useConfigStore = create<ConfigStore>()(
             clearPromptContinue: () => set({ shouldPromptContinue: false }),
         }),
         {
-            name: CONFIG_STORE_KEY,
+            name: `${CONFIG_STORE_KEY}:${useUserStore.getState().user?.id || "anonymous"}`,
             partialize: (state) => ({
                 config: {
                     quality: state.config.quality,
@@ -291,30 +294,44 @@ export const useConfigStore = create<ConfigStore>()(
             merge: (persisted, current) => {
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
+                const defaults = platformConfig(defaultConfig, []);
                 return {
                     ...current,
+                    webdav: defaultWebdavSyncConfig,
+                    isConfigOpen: false,
+                    shouldPromptContinue: false,
                     config: {
-                        ...current.config,
-                        quality: persistedConfig.quality ?? current.config.quality,
-                        size: persistedConfig.size ?? current.config.size,
-                        background: persistedConfig.background ?? current.config.background,
-                        count: persistedConfig.count ?? current.config.count,
-                        canvasImageCount: persistedConfig.canvasImageCount ?? current.config.canvasImageCount,
-                        reasoningEffort: persistedConfig.reasoningEffort ?? current.config.reasoningEffort,
-                        systemPrompt: persistedConfig.systemPrompt ?? current.config.systemPrompt,
-                        videoSeconds: persistedConfig.videoSeconds ?? current.config.videoSeconds,
-                        vquality: persistedConfig.vquality ?? current.config.vquality,
-                        videoGenerateAudio: persistedConfig.videoGenerateAudio ?? current.config.videoGenerateAudio,
-                        videoWatermark: persistedConfig.videoWatermark ?? current.config.videoWatermark,
-                        videoMode: persistedConfig.videoMode ?? current.config.videoMode,
-                        proxyEnabled: persistedConfig.proxyEnabled ?? current.config.proxyEnabled,
-                        proxyUrl: persistedConfig.proxyUrl ?? current.config.proxyUrl,
+                        ...defaults,
+                        quality: persistedConfig.quality ?? defaults.quality,
+                        size: persistedConfig.size ?? defaults.size,
+                        background: persistedConfig.background ?? defaults.background,
+                        count: persistedConfig.count ?? defaults.count,
+                        canvasImageCount: persistedConfig.canvasImageCount ?? defaults.canvasImageCount,
+                        reasoningEffort: persistedConfig.reasoningEffort ?? defaults.reasoningEffort,
+                        systemPrompt: persistedConfig.systemPrompt ?? defaults.systemPrompt,
+                        videoSeconds: persistedConfig.videoSeconds ?? defaults.videoSeconds,
+                        vquality: persistedConfig.vquality ?? defaults.vquality,
+                        videoGenerateAudio: persistedConfig.videoGenerateAudio ?? defaults.videoGenerateAudio,
+                        videoWatermark: persistedConfig.videoWatermark ?? defaults.videoWatermark,
+                        videoMode: persistedConfig.videoMode ?? defaults.videoMode,
+                        proxyEnabled: persistedConfig.proxyEnabled ?? defaults.proxyEnabled,
+                        proxyUrl: persistedConfig.proxyUrl ?? defaults.proxyUrl,
                     },
                 };
             },
         },
     ),
 );
+
+useUserStore.subscribe((state, previous) => {
+    if (state.sessionVersion === previous.sessionVersion) return;
+    if (!useConfigStore.persist) {
+        useConfigStore.setState({ config: platformConfig(defaultConfig, []), webdav: defaultWebdavSyncConfig, isConfigOpen: false, shouldPromptContinue: false });
+        return;
+    }
+    useConfigStore.persist.setOptions({ name: `${CONFIG_STORE_KEY}:${state.user?.id || "anonymous"}` });
+    void useConfigStore.persist.rehydrate();
+});
 
 export function useEffectiveConfig() {
     const config = useConfigStore((state) => state.config);

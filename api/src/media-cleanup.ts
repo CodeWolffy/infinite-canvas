@@ -1,8 +1,9 @@
-import { and, eq, inArray, isNull, lte } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, or } from "drizzle-orm";
 import { db } from "./db/client.js";
 import { config } from "./config.js";
 import {
   assets,
+  canvasProjectHistoryMedia,
   canvasProjectMedia,
   generatedImages,
   generationBatchMedia,
@@ -25,23 +26,24 @@ export async function removeUnreferencedMedia(
       const claimed = await tx
         .update(mediaObjects)
         .set({ status: "deleting" })
-        .where(and(inArray(mediaObjects.id, uniqueIds), eq(mediaObjects.status, "ready")))
+        .where(and(inArray(mediaObjects.id, uniqueIds), inArray(mediaObjects.status, ["ready", "deleting"])))
         .returning({ id: mediaObjects.id, bucket: mediaObjects.bucket, objectKey: mediaObjects.objectKey });
 
       if (!claimed.length) return [];
       const claimedIds = claimed.map((item) => item.id);
 
-      // 2. 批量检查 5 个业务表的引用
-      const [refAssets, refGenerated, refCanvas, refBatch, refMessage] = await Promise.all([
+      // 2. 批量检查当前业务数据和历史快照的引用
+      const [refAssets, refGenerated, refCanvas, refHistory, refBatch, refMessage] = await Promise.all([
         tx.select({ mediaId: assets.mediaId }).from(assets).where(inArray(assets.mediaId, claimedIds)),
         tx.select({ mediaId: generatedImages.mediaId }).from(generatedImages).where(inArray(generatedImages.mediaId, claimedIds)),
         tx.select({ mediaId: canvasProjectMedia.mediaId }).from(canvasProjectMedia).where(inArray(canvasProjectMedia.mediaId, claimedIds)),
+        tx.select({ mediaId: canvasProjectHistoryMedia.mediaId }).from(canvasProjectHistoryMedia).where(inArray(canvasProjectHistoryMedia.mediaId, claimedIds)),
         tx.select({ mediaId: generationBatchMedia.mediaId }).from(generationBatchMedia).where(inArray(generationBatchMedia.mediaId, claimedIds)),
         tx.select({ mediaId: messageMedia.mediaId }).from(messageMedia).where(inArray(messageMedia.mediaId, claimedIds)),
       ]);
 
       const referencedSet = new Set<string>();
-      for (const row of [...refAssets, ...refGenerated, ...refCanvas, ...refBatch, ...refMessage]) {
+      for (const row of [...refAssets, ...refGenerated, ...refCanvas, ...refHistory, ...refBatch, ...refMessage]) {
         if (row.mediaId) referencedSet.add(row.mediaId);
       }
 
@@ -53,14 +55,7 @@ export async function removeUnreferencedMedia(
           .where(inArray(mediaObjects.id, [...referencedSet]));
       }
 
-      // 4. 确认无引用的从数据库中批量删除
-      const confirmed = claimed.filter((item) => !referencedSet.has(item.id));
-      if (confirmed.length > 0) {
-        await tx
-          .delete(mediaObjects)
-          .where(and(inArray(mediaObjects.id, confirmed.map((item) => item.id)), eq(mediaObjects.status, "deleting")));
-      }
-      return confirmed;
+      return claimed.filter((item) => !referencedSet.has(item.id));
     });
   } catch (error) {
     reportError(error, uniqueIds.join(","));
@@ -69,20 +64,22 @@ export async function removeUnreferencedMedia(
 
   if (!toDelete.length) return;
 
-  // 5. MinIO 侧使用 removeObjects 批量删除，消除逐张图往返请求
-  const byBucket = new Map<string, string[]>();
+  // MinIO 确认删除后才释放元数据，失败的 deleting 记录可由后续清理重试。
+  const byBucket = new Map<string, typeof toDelete>();
   for (const item of toDelete) {
     const list = byBucket.get(item.bucket) ?? [];
-    list.push(item.objectKey);
+    list.push(item);
     byBucket.set(item.bucket, list);
   }
 
-  for (const [bucket, keys] of byBucket) {
+  for (const [bucket, items] of byBucket) {
     try {
-      await minio.removeObjects(bucket, keys);
+      const errors = await minio.removeObjects(bucket, items.map((item) => item.objectKey));
+      if (errors.length) throw new Error("部分 MinIO 对象删除失败，已保留记录等待重试");
+      await db.delete(mediaObjects).where(and(inArray(mediaObjects.id, items.map((item) => item.id)), eq(mediaObjects.status, "deleting")));
     } catch (error) {
-      for (const key of keys) {
-        reportError(error, key);
+      for (const item of items) {
+        reportError(error, item.id);
       }
     }
   }
@@ -95,19 +92,24 @@ export async function cleanupOrphanMedia(reportError: (error: unknown, mediaId: 
     .from(mediaObjects)
     .leftJoin(assets, eq(assets.mediaId, mediaObjects.id))
     .leftJoin(canvasProjectMedia, eq(canvasProjectMedia.mediaId, mediaObjects.id))
+    .leftJoin(canvasProjectHistoryMedia, eq(canvasProjectHistoryMedia.mediaId, mediaObjects.id))
     .leftJoin(generatedImages, eq(generatedImages.mediaId, mediaObjects.id))
     .leftJoin(generationBatchMedia, eq(generationBatchMedia.mediaId, mediaObjects.id))
     .leftJoin(messageMedia, eq(messageMedia.mediaId, mediaObjects.id))
     .where(
-      and(
-        eq(mediaObjects.status, "ready"),
-        eq(mediaObjects.referenceCount, 0),
-        lte(mediaObjects.createdAt, cutoff),
-        isNull(assets.id),
-        isNull(canvasProjectMedia.projectId),
-        isNull(generatedImages.id),
-        isNull(generationBatchMedia.batchId),
-        isNull(messageMedia.messageId),
+      or(
+        eq(mediaObjects.status, "deleting"),
+        and(
+          eq(mediaObjects.status, "ready"),
+          eq(mediaObjects.referenceCount, 0),
+          lte(mediaObjects.createdAt, cutoff),
+          isNull(assets.id),
+          isNull(canvasProjectMedia.projectId),
+          isNull(canvasProjectHistoryMedia.historyId),
+          isNull(generatedImages.id),
+          isNull(generationBatchMedia.batchId),
+          isNull(messageMedia.messageId),
+        ),
       ),
     )
     .limit(500);

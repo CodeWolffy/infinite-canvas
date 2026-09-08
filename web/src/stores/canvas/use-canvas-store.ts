@@ -2,6 +2,7 @@ import { create } from "zustand";
 import i18n from "@/i18n";
 import * as canvasApi from "@/services/api/canvas-projects";
 import { ApiError } from "@/services/api/request";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
 
@@ -135,6 +136,7 @@ export async function flushProject(id: string) {
 }
 
 async function flushProjectUpdate(id: string) {
+    const sessionVersion = useUserStore.getState().sessionVersion;
     const timer = saveTimers.get(id);
     if (timer) clearTimeout(timer);
     saveTimers.delete(id);
@@ -142,7 +144,13 @@ async function flushProjectUpdate(id: string) {
         pendingUpdates.delete(id);
         return;
     }
-    if (savingProjects.has(id)) return;
+    const saving = savingProjects.get(id);
+    if (saving) {
+        await saving;
+        if (useUserStore.getState().sessionVersion !== sessionVersion) return;
+        if (savingProjects.has(id) || (!blockedProjects.has(id) && pendingUpdates.has(id))) await flushProjectUpdate(id);
+        return;
+    }
     const patch = pendingUpdates.get(id);
     if (!patch) return;
     pendingUpdates.delete(id);
@@ -150,6 +158,7 @@ async function flushProjectUpdate(id: string) {
     const request = canvasApi
         .updateCanvasProject(id, patch)
         .then((record) => {
+            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             saveAttempts.delete(id);
             blockedProjects.delete(id);
             useCanvasStore.setState((state) => ({
@@ -168,6 +177,7 @@ async function flushProjectUpdate(id: string) {
         })
         .catch((error: unknown) => {
             failed = true;
+            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             if (deletingProjects.has(id)) return;
             // 失败的改动必须留在队列里，否则这段编辑就永久丢了。
             pendingUpdates.set(id, { ...patch, ...pendingUpdates.get(id) });
@@ -185,11 +195,12 @@ async function flushProjectUpdate(id: string) {
             });
         })
         .finally(() => {
+            if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             savingProjects.delete(id);
-            if (!failed && pendingUpdates.has(id)) void flushProjectUpdate(id);
         });
     savingProjects.set(id, request);
     await request;
+    if (useUserStore.getState().sessionVersion === sessionVersion && !failed && pendingUpdates.has(id)) await flushProjectUpdate(id);
 }
 
 function cancelProjectUpdate(id: string) {
@@ -208,21 +219,30 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             deletedProjects: [],
             saveError: null,
             hydrateProjects: async (userId) => {
+                const { sessionVersion, user } = useUserStore.getState();
+                if (user?.id !== userId) return;
                 if (get().hydrated && get().hydratedUserId === userId) return;
                 if (get().hydratedUserId !== userId) set({ projects: [], hydrated: false, hydratedUserId: userId, saveError: null });
                 let request = hydratePromises.get(userId);
                 if (!request) {
-                    request = canvasApi.listCanvasProjects().then((records) => { if (get().hydratedUserId === userId) set({ projects: records.map(listProject), hydrated: true }); }).finally(() => { hydratePromises.delete(userId); });
+                    request = canvasApi.listCanvasProjects().then((records) => {
+                        if (useUserStore.getState().sessionVersion === sessionVersion) set({ projects: records.map(listProject), hydrated: true });
+                    }).finally(() => {
+                        if (useUserStore.getState().sessionVersion === sessionVersion) hydratePromises.delete(userId);
+                    });
                     hydratePromises.set(userId, request);
                 }
                 await request;
             },
             createProject: async (title = i18n.t("canvas.project.untitled")) => {
+                const sessionVersion = useUserStore.getState().sessionVersion;
                 const project = detailProject(await canvasApi.createCanvasProject({ title, snapshot: emptySnapshot() }));
+                assertCurrentSession(sessionVersion);
                 set((state) => ({ projects: [project, ...state.projects] }));
                 return project.id;
             },
             importProject: async (source) => {
+                const sessionVersion = useUserStore.getState().sessionVersion;
                 const snapshot: CanvasSnapshot = {
                     nodes: source.nodes || [],
                     connections: source.connections || [],
@@ -233,31 +253,38 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                     viewport: source.viewport || initialViewport,
                 };
                 const project = detailProject(await canvasApi.createCanvasProject({ title: source.title || i18n.t("canvas.project.imported"), snapshot }));
+                assertCurrentSession(sessionVersion);
                 set((state) => ({ projects: [project, ...state.projects] }));
                 return project.id;
             },
             loadProject: async (id) => {
+                const sessionVersion = useUserStore.getState().sessionVersion;
                 const cached = get().projects.find((item) => item.id === id);
                 if (cached?.snapshotLoaded) return cached;
                 let request = loadPromises.get(id);
                 if (!request) {
                     request = canvasApi
                         .getCanvasProject(id)
-                        .then((record) => mergeProject(detailProject(record)))
+                        .then((record) => useUserStore.getState().sessionVersion === sessionVersion ? mergeProject(detailProject(record)) : null)
                         .catch((error: unknown) => {
+                            if (useUserStore.getState().sessionVersion !== sessionVersion) return null;
                             if (error instanceof ApiError && error.status === 404) {
                                 set((state) => ({ projects: state.projects.filter((item) => item.id !== id) }));
                                 return null;
                             }
                             throw error;
                         })
-                        .finally(() => { loadPromises.delete(id); });
+                        .finally(() => {
+                            if (useUserStore.getState().sessionVersion === sessionVersion) loadPromises.delete(id);
+                        });
                     loadPromises.set(id, request);
                 }
                 return request;
             },
             loadProjects: async (ids) => {
+                const sessionVersion = useUserStore.getState().sessionVersion;
                 const loaded = await Promise.all(ids.map((id) => get().loadProject(id)));
+                assertCurrentSession(sessionVersion);
                 return loaded.filter((project): project is CanvasProject => Boolean(project));
             },
             renameProject: async (id, title) => {
@@ -270,12 +297,15 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 if (get().hydrated) enqueueProjectUpdate(id, { title: nextTitle });
             },
             deleteProjects: async (ids) => {
+                const sessionVersion = useUserStore.getState().sessionVersion;
                 ids.forEach((id) => deletingProjects.add(id));
                 ids.forEach(cancelProjectUpdate);
                 try {
                     await Promise.all(ids.map((id) => savingProjects.get(id)).filter((request): request is Promise<void> => Boolean(request)));
+                    assertCurrentSession(sessionVersion);
                     ids.forEach(cancelProjectUpdate);
                     await Promise.all(ids.map(canvasApi.deleteCanvasProject));
+                    assertCurrentSession(sessionVersion);
                     const now = new Date().toISOString();
                     const removing = new Set(ids);
                     set((state) => ({
@@ -284,7 +314,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                         saveError: state.saveError && ids.includes(state.saveError.projectId) ? null : state.saveError,
                     }));
                 } finally {
-                    ids.forEach((id) => deletingProjects.delete(id));
+                    if (useUserStore.getState().sessionVersion === sessionVersion) ids.forEach((id) => deletingProjects.delete(id));
                 }
             },
             replaceProjects: (projects, deletedProjects = []) => set({ projects, deletedProjects }),
@@ -302,6 +332,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 if (updated && get().hydrated) enqueueProjectUpdate(id, { snapshot: projectSnapshot(updated) });
             },
             applyRestoredProject: (record) => {
+                if (!get().projects.some((project) => project.id === record.id)) return;
                 cancelProjectUpdate(record.id);
                 mergeProject(detailProject(record));
                 set((state) => ({ saveError: state.saveError?.projectId === record.id ? null : state.saveError }));
@@ -314,3 +345,17 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                 await flushProjectUpdate(id);
             },
 }));
+
+useUserStore.subscribe((state, previous) => {
+    if (state.sessionVersion === previous.sessionVersion) return;
+    saveTimers.forEach(clearTimeout);
+    saveTimers.clear();
+    pendingUpdates.clear();
+    savingProjects.clear();
+    deletingProjects.clear();
+    hydratePromises.clear();
+    loadPromises.clear();
+    saveAttempts.clear();
+    blockedProjects.clear();
+    useCanvasStore.setState({ hydrated: false, hydratedUserId: "", projects: [], deletedProjects: [], saveError: null });
+});

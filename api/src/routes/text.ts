@@ -53,6 +53,7 @@ const createBody = z.object({
   title: z.string().trim().min(1).max(200).default("新对话"),
   modelId: z.string().uuid(),
   content: z.string().trim().min(1).max(100000),
+  systemPrompt: z.string().max(100000).default(""),
   attachmentMediaIds: z.array(z.string().uuid()).max(20).default([]),
   parameters: z.record(z.string(), z.unknown()).default({}),
 });
@@ -89,6 +90,19 @@ export async function textRoutes(app: FastifyInstance) {
     const user = await authenticate(request, reply);
     if (!user) return;
     const body = createBody.parse(request.body);
+    const [existingRequest] = await db
+      .select()
+      .from(textRequests)
+      .where(and(eq(textRequests.id, body.requestId), eq(textRequests.userId, user.id)))
+      .limit(1);
+    if (existingRequest?.status === "succeeded" && existingRequest.responseMessageId) {
+      const [message] = await db.select().from(messages)
+        .where(and(eq(messages.id, existingRequest.responseMessageId), eq(messages.conversationId, existingRequest.conversationId))).limit(1);
+      if (message) return { conversationId: existingRequest.conversationId, requestId: existingRequest.id, message };
+    }
+    if (existingRequest?.status === "running" || existingRequest?.status === "queued") {
+      return reply.code(409).send({ error: "request_in_progress", message: "请求正在处理中，请稍候" });
+    }
     const [model] = await db
       .select({ id: models.id, name: models.name, displayName: models.displayName })
       .from(models)
@@ -99,7 +113,6 @@ export async function textRoutes(app: FastifyInstance) {
       return reply.code(503).send({ error: "no_channel", message: "当前模型暂无可用渠道，请联系管理员在平台管理中检查渠道状态" });
     }
     const attachmentMediaIds = [...new Set(body.attachmentMediaIds)];
-    let attachmentMedia: AttachmentMedia[] = [];
     if (attachmentMediaIds.length) {
       const visible = await db
         .selectDistinct({
@@ -127,8 +140,6 @@ export async function textRoutes(app: FastifyInstance) {
       if (visible.some((media) => !supportedAttachmentMime.has(media.mimeType) || media.byteSize > config.MAX_UPLOAD_BYTES)) {
         return reply.code(400).send({ error: "invalid_media", message: `附件仅支持 ${maxMb}MB 以内的 PNG、JPEG 或 WebP 图片` });
       }
-      const visibleById = new Map(visible.map((media) => [media.id, media]));
-      attachmentMedia = attachmentMediaIds.map((id) => visibleById.get(id)!);
     }
     if (!body.conversationId && body.canvasProjectId) {
       const [canvas] = await db
@@ -148,37 +159,16 @@ export async function textRoutes(app: FastifyInstance) {
       if (!owned) return reply.code(404).send({ error: "not_found", message: "对话不存在" });
     }
 
-    const [existingRequest] = await db
-      .select({
-        id: textRequests.id,
-        status: textRequests.status,
-        conversationId: textRequests.conversationId,
-        requestMessageId: textRequests.requestMessageId,
-        responseMessageId: textRequests.responseMessageId,
-      })
-      .from(textRequests)
-      .where(and(eq(textRequests.id, body.requestId), eq(textRequests.userId, user.id)))
-      .limit(1);
-
-    if (existingRequest) {
-      if (existingRequest.status === "succeeded" && existingRequest.responseMessageId) {
-        const [existingResponse] = await db
-          .select()
-          .from(messages)
-          .where(eq(messages.id, existingRequest.responseMessageId))
-          .limit(1);
-        if (existingResponse) {
-          return { message: existingResponse };
-        }
-      }
-      if (existingRequest.status === "running") {
-        return reply.code(409).send({ error: "request_in_progress", message: "请求正在处理中，请稍候" });
-      }
-    }
-
     const startedAt = new Date();
     try {
       const created = await db.transaction(async (tx) => {
+        // 同一幂等键的创建和失败重试必须在锁内重新判定，不能复用事务外的旧状态。
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${body.requestId}::uuid::text, 0))`);
+        const [currentRequest] = await tx.select().from(textRequests).where(eq(textRequests.id, body.requestId)).limit(1);
+        if (currentRequest && (currentRequest.userId !== user.id || !["failed", "canceled"].includes(currentRequest.status))) {
+          throw new Error("TEXT_REQUEST_CONFLICT");
+        }
+        if (Boolean(currentRequest) !== Boolean(existingRequest)) throw new Error("TEXT_REQUEST_CONFLICT");
         let conversationId = existingRequest?.conversationId || body.conversationId;
         if (!conversationId) {
           const [conversation] = await tx
@@ -196,6 +186,10 @@ export async function textRoutes(app: FastifyInstance) {
             .where(eq(messages.id, existingRequest.requestMessageId))
             .limit(1);
           if (found) {
+            if (found.content !== body.content || JSON.stringify(found.attachments) !== JSON.stringify(attachmentMediaIds)
+              || existingRequest?.modelId !== body.modelId || (body.conversationId && body.conversationId !== conversationId)) {
+              throw new Error("TEXT_REQUEST_CONFLICT");
+            }
             requestMessage = found;
           }
         }
@@ -248,23 +242,34 @@ export async function textRoutes(app: FastifyInstance) {
               .returning();
         return { conversationId, requestMessage, textRequest: textRequest! };
       });
-      const { conversationId, requestMessage, textRequest } = created;
+      const { conversationId, textRequest } = created;
 
       let activeRequestLogId: string | undefined;
       try {
         const recentMessages = await db
-          .select({ id: messages.id, role: messages.role, content: messages.content })
+          .select({ id: messages.id, role: messages.role, content: messages.content, attachments: messages.attachments })
           .from(messages)
           .where(eq(messages.conversationId, conversationId))
           .orderBy(desc(messages.createdAt), desc(messages.id))
           .limit(maxHistoryMessages);
         const history = recentMessages.reverse();
-        const attachmentImages = await loadAttachmentImages(attachmentMedia);
-        const upstreamMessages = attachmentImages.length
-          ? history.map(({ id, ...message }) =>
-              id === requestMessage.id ? { ...message, images: attachmentImages } : message,
-            )
-          : history.map(({ id: _, ...message }) => message);
+        const historyMedia = await db.select({
+          messageId: messageMedia.messageId,
+          id: mediaObjects.id,
+          bucket: mediaObjects.bucket,
+          objectKey: mediaObjects.objectKey,
+          mimeType: mediaObjects.mimeType,
+          byteSize: mediaObjects.byteSize,
+        }).from(messageMedia).innerJoin(mediaObjects, eq(mediaObjects.id, messageMedia.mediaId))
+          .where(and(inArray(messageMedia.messageId, history.map((message) => message.id)), eq(mediaObjects.status, "ready")));
+        const uniqueMedia = [...new Map(historyMedia.map((media) => [media.id, media])).values()];
+        const images = await loadAttachmentImages(uniqueMedia);
+        const imagesById = new Map(uniqueMedia.map((media, index) => [media.id, images[index]!]));
+        const upstreamMessages = history.map(({ attachments, ...message }) => ({
+          ...message,
+          images: Array.isArray(attachments) ? attachments.flatMap((id) => imagesById.has(id) ? [imagesById.get(id)!] : []) : [],
+        }));
+        if (body.systemPrompt) upstreamMessages.unshift({ id: "system", role: "system", content: body.systemPrompt, images: [] });
         const { result: content, candidate } = await runWithFailover(body.modelId, async (channel) => {
           await db
             .update(textRequests)
@@ -326,6 +331,9 @@ export async function textRoutes(app: FastifyInstance) {
         return reply.code(502).send({ error: upstream.category, message: upstream.message, conversationId, requestId: textRequest.id });
       }
     } catch (error) {
+      if (error instanceof Error && error.message === "TEXT_REQUEST_CONFLICT") {
+        return reply.code(409).send({ error: "request_conflict", message: "请求已被处理或重试内容发生变化，请刷新状态后重试" });
+      }
       if (error instanceof Error && error.message === "MEDIA_UNAVAILABLE") {
         return reply.code(400).send({ error: "invalid_media", message: "附件已不可用" });
       }

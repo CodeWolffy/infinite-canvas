@@ -6,6 +6,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import {
     listCanvasProjectHistory,
     createCanvasProjectSnapshot,
@@ -20,6 +22,14 @@ type Props = {
     onClose: () => void;
     onRestored: (project: CanvasProjectDetail) => void;
 };
+
+async function flushBeforeHistoryChange(projectId: string) {
+    const sessionVersion = useUserStore.getState().sessionVersion;
+    await useCanvasStore.getState().flushProject(projectId);
+    assertCurrentSession(sessionVersion);
+    const error = useCanvasStore.getState().saveError;
+    if (error?.projectId === projectId) throw new Error(error.message);
+}
 
 export function CanvasHistoryModal({ projectId, open, onClose, onRestored }: Props) {
     const { t } = useTranslation();
@@ -38,7 +48,10 @@ export function CanvasHistoryModal({ projectId, open, onClose, onRestored }: Pro
     });
 
     const createMutation = useMutation({
-        mutationFn: (note?: string) => createCanvasProjectSnapshot(projectId, note),
+        mutationFn: async (note?: string) => {
+            await flushBeforeHistoryChange(projectId);
+            return createCanvasProjectSnapshot(projectId, note);
+        },
         onSuccess: () => {
             message.success(t("canvas.history.createSuccess", "快照创建成功"));
             setSnapshotNote("");
@@ -50,7 +63,10 @@ export function CanvasHistoryModal({ projectId, open, onClose, onRestored }: Pro
     });
 
     const restoreMutation = useMutation({
-        mutationFn: (historyId: string) => restoreCanvasProjectHistory(projectId, historyId),
+        mutationFn: async (historyId: string) => {
+            await flushBeforeHistoryChange(projectId);
+            return restoreCanvasProjectHistory(projectId, historyId);
+        },
         onSuccess: (project) => {
             message.success(t("canvas.history.restoreSuccess", "已成功还原到历史版本"));
             onRestored(project);

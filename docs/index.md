@@ -33,6 +33,7 @@
 
 - [Changelog](/docs/progress/changelog)
 - [Internal Creative Platform Plan](/docs/progress/internal-platform-plan)
+- [Enterprise API Review](enterprise-api-review.md)
 - [Pending Tests](/docs/progress/pending-test)
 - [TODO](/docs/progress/todo)
 
@@ -40,3 +41,4 @@
 
 - The internal-platform implementation is pending verification; canvases, assets, image history, and text results now use PostgreSQL and MinIO as authoritative storage.
 - Administrators configure encrypted server-side channel API keys, and regular users send image and text requests through the platform.
+- The deployment uses a public HTTPS domain through 1Panel and the Web Nginx proxy, with source ports closed to the Internet. Local Codex remains an optional per-user integration, independent of platform text models.

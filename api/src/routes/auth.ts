@@ -68,8 +68,11 @@ class SimpleRateLimiter {
     }
   }
 
-  reset(key: string) {
-    this.records.delete(key);
+  refund(key: string) {
+    const record = this.records.get(key);
+    if (!record) return;
+    record.count = Math.max(0, record.count - 1);
+    if (!record.count) this.records.delete(key);
   }
 }
 
@@ -111,6 +114,9 @@ export async function authRoutes(app: FastifyInstance) {
         .send({ error: "too_many_requests", message: `尝试次数过多，请在 ${limitStatus.retryAfterSeconds} 秒后再试` });
     }
 
+    // 在第一个 await 前占用尝试名额，阻止并发请求同时穿过检查。
+    authRateLimiter.recordFailure(rateLimitKey, 60 * 1000);
+    authRateLimiter.recordFailure(ipRateLimitKey, 5 * 60 * 1000);
     const [user] = await db
       .select()
       .from(users)
@@ -121,12 +127,11 @@ export async function authRoutes(app: FastifyInstance) {
     const isValid = await verifyPassword(hashToVerify, body.password);
 
     if (!user || !isValid) {
-      authRateLimiter.recordFailure(rateLimitKey, 60 * 1000);
-      authRateLimiter.recordFailure(ipRateLimitKey, 5 * 60 * 1000);
       return reply.code(401).send({ error: "invalid_credentials", message: "用户名或密码错误" });
     }
 
-    authRateLimiter.reset(rateLimitKey);
+    authRateLimiter.refund(rateLimitKey);
+    authRateLimiter.refund(ipRateLimitKey);
     await db.update(users).set({ lastLoginAt: new Date(), updatedAt: new Date() }).where(eq(users.id, user.id));
     await createSession(user.id, reply);
     return { user: publicUser({ ...user, lastLoginAt: new Date() }) };
@@ -152,15 +157,16 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     const body = changePasswordBody.parse(request.body);
+    authRateLimiter.recordFailure(rateLimitKey, 60 * 1000);
     if (!(await verifyPassword(user.passwordHash, body.currentPassword))) {
-      authRateLimiter.recordFailure(rateLimitKey, 60 * 1000);
       return reply.code(400).send({ error: "invalid_password", message: "当前密码错误" });
     }
     if (body.currentPassword === body.newPassword) {
+      authRateLimiter.refund(rateLimitKey);
       return reply.code(400).send({ error: "password_unchanged", message: "新密码不能与当前密码相同" });
     }
 
-    authRateLimiter.reset(rateLimitKey);
+    authRateLimiter.refund(rateLimitKey);
 
     await db
       .update(users)

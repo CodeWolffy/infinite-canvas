@@ -6,12 +6,14 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { authReturnPath } from "@/lib/auth-return-path";
 
 type LoginValues = { username: string; password: string };
 
 export default function LoginPage() {
     const navigate = useNavigate();
     const location = useLocation();
+    const target = authReturnPath((location.state as { from?: string } | null)?.from);
     const theme = useThemeStore((state) => state.theme);
     const setTheme = useThemeStore((state) => state.setTheme);
     const user = useUserStore((state) => state.user);
@@ -25,15 +27,14 @@ export default function LoginPage() {
         void initialize();
     }, [initialize]);
 
-    if (user) return <Navigate to={user.mustChangePassword ? "/change-password" : "/"} replace />;
+    if (user) return <Navigate to={user.mustChangePassword ? "/change-password" : target} replace state={{ from: target }} />;
 
     const submit = async (values: LoginValues) => {
         setSubmitting(true);
         setError("");
         try {
             const loggedInUser = await login(values);
-            const target = (location.state as { from?: string } | null)?.from || "/";
-            navigate(loggedInUser.mustChangePassword ? "/change-password" : target, { replace: true });
+            navigate(loggedInUser.mustChangePassword ? "/change-password" : target, { replace: true, state: { from: target } });
         } catch (reason) {
             setError(reason instanceof Error ? reason.message : "登录失败，请稍后重试");
         } finally {

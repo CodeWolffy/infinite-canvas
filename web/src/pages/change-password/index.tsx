@@ -1,22 +1,25 @@
 import { useState } from "react";
 import { Alert, App, Button, Form, Input } from "antd";
 import { Check, KeyRound, LogOut } from "lucide-react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { useUserStore } from "@/stores/use-user-store";
+import { authReturnPath } from "@/lib/auth-return-path";
 
 type PasswordValues = { currentPassword: string; newPassword: string; confirmPassword: string };
 
 export default function ChangePasswordPage() {
     const { message } = App.useApp();
     const navigate = useNavigate();
+    const location = useLocation();
+    const target = authReturnPath((location.state as { from?: string } | null)?.from);
     const user = useUserStore((state) => state.user);
     const changePassword = useUserStore((state) => state.changePassword);
     const logout = useUserStore((state) => state.logout);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState("");
 
-    if (user && !user.mustChangePassword) return <Navigate to="/" replace />;
+    if (user && !user.mustChangePassword) return <Navigate to={target} replace />;
 
     const submit = async ({ currentPassword, newPassword }: PasswordValues) => {
         setSubmitting(true);
@@ -24,7 +27,7 @@ export default function ChangePasswordPage() {
         try {
             await changePassword({ currentPassword, newPassword });
             message.success("密码已更新");
-            navigate("/", { replace: true });
+            navigate(target, { replace: true });
         } catch (reason) {
             setError(reason instanceof Error ? reason.message : "密码修改失败");
         } finally {

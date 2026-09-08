@@ -22,7 +22,7 @@ services:
       # Nginx 前置反代时必须为 true，API 才能从 X-Forwarded-For 取到真实客户端 IP（登录限流按 IP 生效）。
       TRUST_PROXY: ${TRUST_PROXY:-true}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
       SESSION_DAYS: ${SESSION_DAYS:-7}
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD}

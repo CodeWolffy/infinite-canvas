@@ -13,6 +13,7 @@ export async function createTextRequest(input: {
     title?: string;
     modelId: string;
     content: string;
+    systemPrompt?: string;
     attachmentMediaIds?: string[];
     parameters?: Record<string, unknown>;
 }, signal?: AbortSignal) {

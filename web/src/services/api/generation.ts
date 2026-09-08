@@ -1,4 +1,5 @@
-import { ApiError, apiRequest } from "@/services/api/request";
+import { apiRequest } from "@/services/api/request";
+export { uploadMedia as uploadGenerationMedia } from "@/services/api/media";
 
 export type PublicModel = {
     id: string;
@@ -7,17 +8,6 @@ export type PublicModel = {
     capability: "image" | "text";
     sortOrder: number;
     description: string | null;
-};
-
-export type UploadedMedia = {
-    id: string;
-    originalName: string;
-    mimeType: string;
-    byteSize: number;
-    width: number | null;
-    height: number | null;
-    createdAt: string;
-    url: string;
 };
 
 export type GenerationBatch = {
@@ -80,19 +70,6 @@ export async function getGenerationPreferences() {
 
 export async function updateGenerationPreferences(preferences: Record<string, unknown>) {
     return (await apiRequest<{ preferences: Record<string, unknown> }>("/api/preferences", { method: "PUT", body: preferences })).preferences;
-}
-
-export async function uploadGenerationMedia(input: Blob, filename = "reference.png") {
-    const form = new FormData();
-    form.append("file", input, filename);
-    const response = await fetch("/api/media", { method: "POST", body: form, credentials: "include" });
-    if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
-        if (response.status === 401) window.dispatchEvent(new Event("auth:unauthorized"));
-        if (payload?.error === "password_change_required") window.dispatchEvent(new Event("auth:password-change-required"));
-        throw new ApiError(payload?.message || `上传失败（HTTP ${response.status}）`, response.status, payload?.error);
-    }
-    return ((await response.json()) as { media: UploadedMedia }).media;
 }
 
 export async function createGenerationBatch(input: { modelId: string; prompt: string; count: number; parameters: Record<string, unknown>; referenceMediaIds: string[]; canvasProjectId?: string }) {

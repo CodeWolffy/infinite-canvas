@@ -12,6 +12,7 @@ import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
 import type { ReferenceImage } from "@/types/image";
+import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
@@ -816,7 +817,9 @@ export async function requestDirectEdit(config: AiConfig, prompt: string, refere
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: AiTextMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
+    const sessionVersion = useUserStore.getState().sessionVersion;
     const throwIfAborted = () => {
+        assertCurrentSession(sessionVersion);
         if (!options?.signal?.aborted) return;
         options.onTextRequestSkipped?.();
         throw new DOMException("Aborted", "AbortError");
@@ -825,11 +828,14 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
     let conversationId = options?.conversationId;
     if (!conversationId) {
         conversationId = (await createTextConversation({ canvasProjectId: options?.canvasProjectId, title: textMessageContent(messages.at(-1)?.content || "新对话").slice(0, 80) || "新对话" })).id;
+        throwIfAborted();
         options?.onConversationCreated?.(conversationId);
     }
     throwIfAborted();
-    const requestMessages = options?.conversationId ? messages.slice(-1) : messages;
-    const content = requestMessages.map((message) => `${message.role}: ${textMessageContent(message.content)}`).join("\n\n");
+    const inputMessages = messages.filter((message) => message.role !== "system");
+    const requestMessages = options?.conversationId ? inputMessages.slice(-1) : inputMessages;
+    const content = requestMessages.map((message) => textMessageContent(message.content)).join("\n\n");
+    const systemPrompt = [config.systemPrompt, ...messages.filter((message) => message.role === "system").map((message) => textMessageContent(message.content))].filter(Boolean).join("\n\n");
     const [attachmentMediaIds, modelId] = await Promise.all([
         Promise.all(
             requestMessages.flatMap((message) =>
@@ -853,10 +859,12 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
         modelId,
         canvasProjectId: options?.canvasProjectId,
         content,
+        systemPrompt,
         attachmentMediaIds,
         parameters: config.reasoningEffort === "auto" ? {} : { reasoningEffort: config.reasoningEffort },
     });
     const response = options?.signal ? await waitForTextRequest(request, options.signal) : await request;
+    assertCurrentSession(sessionVersion);
     if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const answer = response.message.content || apiText("noContent");
     onDelta(answer);
@@ -905,28 +913,39 @@ function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 async function requestPlatformImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {
-    if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    const referenceMediaIds = await Promise.all(references.map(ensureReferenceMedia));
+    const sessionVersion = useUserStore.getState().sessionVersion;
+    const throwIfAborted = () => {
+        assertCurrentSession(sessionVersion);
+        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    };
+    throwIfAborted();
+    const [referenceMediaIds, modelId] = await Promise.all([
+        Promise.all(references.map(ensureReferenceMedia)),
+        resolvePlatformModelId(config.model || config.imageModel, "image"),
+    ]);
+    throwIfAborted();
     const created = await createGenerationBatch({
-        modelId: await resolvePlatformModelId(config.model || config.imageModel, "image"),
+        modelId,
         canvasProjectId: options?.canvasProjectId,
         prompt,
         count,
         referenceMediaIds,
         parameters: platformImageParameters(config),
     });
+    assertCurrentSession(sessionVersion);
     options?.onBatchCreated?.({ ...created, referenceMediaIds });
     const pollStartedAt = Date.now();
     let pollInterval = BATCH_POLL_BASE_MS;
     let consecutiveNetworkErrors = 0;
     for (;;) {
-        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        throwIfAborted();
         let detail: GenerationBatchDetail | undefined;
         try {
             detail = await getGenerationBatch(created.batch.id);
+            throwIfAborted();
             consecutiveNetworkErrors = 0;
         } catch (error) {
-            if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+            throwIfAborted();
             consecutiveNetworkErrors += 1;
             if (consecutiveNetworkErrors >= 20) throw error;
         }
@@ -962,9 +981,11 @@ export function platformImageParameters(config: AiConfig) {
 }
 
 async function ensureReferenceMedia(image: ReferenceImage) {
+    const sessionVersion = useUserStore.getState().sessionVersion;
     const existing = image.storageKey ? mediaId(image.storageKey) : mediaIdFromUrl(image.dataUrl || image.url || "")[0];
     if (existing) return existing;
     const blob = await (await fetch(image.dataUrl || image.url || "")).blob();
+    assertCurrentSession(sessionVersion);
     return (await uploadGenerationMedia(blob, image.name || "reference.png")).id;
 }
 

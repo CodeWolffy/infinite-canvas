@@ -7,6 +7,7 @@ import { channels, modelChannels, models } from "../db/schema.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 const bindingParams = z.object({ id: z.string().uuid(), channelId: z.string().uuid() });
+const bindingIdParams = z.object({ id: z.string().uuid(), bindingId: z.string().uuid() });
 const decimal = z.union([z.string().regex(/^\d+(\.\d{1,6})?$/), z.number().nonnegative()]).nullable();
 const modelBody = z.object({
   name: z.string().trim().min(1).max(120),
@@ -21,7 +22,15 @@ const modelBody = z.object({
 const updateModelBody = modelBody.partial().refine((body) => Object.keys(body).length > 0);
 const statusBody = z.object({ status: z.enum(["draft", "published", "disabled"]) });
 const bindingBody = z.object({
+  id: z.string().uuid().optional(),
   upstreamModel: z.string().trim().min(1).max(160),
+  priority: z.number().int().default(0),
+  weight: z.number().int().positive().default(100),
+  enabled: z.boolean().default(true),
+});
+const batchBindingBody = z.object({
+  channelId: z.string().uuid(),
+  upstreamModels: z.array(z.string().trim().min(1).max(160)).min(1),
   priority: z.number().int().default(0),
   weight: z.number().int().positive().default(100),
   enabled: z.boolean().default(true),
@@ -115,6 +124,7 @@ export async function adminModelRoutes(app: FastifyInstance) {
     const { id } = paramsSchema.parse(request.params);
     const bindings = await db
       .select({
+        id: modelChannels.id,
         modelId: modelChannels.modelId,
         channelId: modelChannels.channelId,
         channelName: channels.name,
@@ -128,7 +138,8 @@ export async function adminModelRoutes(app: FastifyInstance) {
       })
       .from(modelChannels)
       .innerJoin(channels, eq(channels.id, modelChannels.channelId))
-      .where(and(eq(modelChannels.modelId, id), isNull(channels.deletedAt)));
+      .where(and(eq(modelChannels.modelId, id), isNull(channels.deletedAt)))
+      .orderBy(asc(channels.name), asc(modelChannels.upstreamModel));
     return { bindings };
   });
 
@@ -137,15 +148,84 @@ export async function adminModelRoutes(app: FastifyInstance) {
     if (!admin) return;
     const { id, channelId } = bindingParams.parse(request.params);
     const body = bindingBody.parse(request.body);
-    const [binding] = await db
+
+    let binding;
+    if (body.id) {
+      [binding] = await db
+        .update(modelChannels)
+        .set({
+          upstreamModel: body.upstreamModel,
+          priority: body.priority,
+          weight: body.weight,
+          enabled: body.enabled,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(modelChannels.id, body.id), eq(modelChannels.modelId, id)))
+        .returning();
+    } else {
+      [binding] = await db
+        .insert(modelChannels)
+        .values({
+          modelId: id,
+          channelId,
+          upstreamModel: body.upstreamModel,
+          priority: body.priority,
+          weight: body.weight,
+          enabled: body.enabled,
+        })
+        .onConflictDoUpdate({
+          target: [modelChannels.modelId, modelChannels.channelId, modelChannels.upstreamModel],
+          set: {
+            priority: body.priority,
+            weight: body.weight,
+            enabled: body.enabled,
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+    }
+    return { binding };
+  });
+
+  app.post("/:id/channels/batch", async (request, reply) => {
+    const admin = await authenticate(request, reply, { admin: true });
+    if (!admin) return;
+    const { id } = paramsSchema.parse(request.params);
+    const body = batchBindingBody.parse(request.body);
+    const rows = body.upstreamModels.map((upstreamModel) => ({
+      modelId: id,
+      channelId: body.channelId,
+      upstreamModel,
+      priority: body.priority,
+      weight: body.weight,
+      enabled: body.enabled,
+    }));
+    const bindings = await db
       .insert(modelChannels)
-      .values({ modelId: id, channelId, ...body })
+      .values(rows)
       .onConflictDoUpdate({
-        target: [modelChannels.modelId, modelChannels.channelId],
-        set: { ...body, updatedAt: new Date() },
+        target: [modelChannels.modelId, modelChannels.channelId, modelChannels.upstreamModel],
+        set: {
+          priority: body.priority,
+          weight: body.weight,
+          enabled: body.enabled,
+          updatedAt: new Date(),
+        },
       })
       .returning();
-    return { binding };
+    return { bindings };
+  });
+
+  app.delete("/:id/bindings/:bindingId", async (request, reply) => {
+    const admin = await authenticate(request, reply, { admin: true });
+    if (!admin) return;
+    const { id, bindingId } = bindingIdParams.parse(request.params);
+    const [binding] = await db
+      .delete(modelChannels)
+      .where(and(eq(modelChannels.modelId, id), eq(modelChannels.id, bindingId)))
+      .returning({ id: modelChannels.id });
+    if (!binding) return reply.code(404).send({ error: "not_found", message: "模型渠道绑定不存在" });
+    return reply.code(204).send();
   });
 
   app.delete("/:id/channels/:channelId", async (request, reply) => {
@@ -155,7 +235,7 @@ export async function adminModelRoutes(app: FastifyInstance) {
     const [binding] = await db
       .delete(modelChannels)
       .where(and(eq(modelChannels.modelId, id), eq(modelChannels.channelId, channelId)))
-      .returning({ modelId: modelChannels.modelId });
+      .returning({ id: modelChannels.id });
     if (!binding) return reply.code(404).send({ error: "not_found", message: "模型渠道绑定不存在" });
     return reply.code(204).send();
   });

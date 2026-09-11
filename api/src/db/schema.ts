@@ -119,6 +119,7 @@ export const channels = pgTable("channels", {
 export const modelChannels = pgTable(
   "model_channels",
   {
+    id: uuid("id").primaryKey().defaultRandom(),
     modelId: uuid("model_id").notNull().references(() => models.id, { onDelete: "cascade" }),
     channelId: uuid("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
     upstreamModel: varchar("upstream_model", { length: 160 }).notNull(),
@@ -128,7 +129,11 @@ export const modelChannels = pgTable(
     ...timestamps(),
   },
   (table) => [
-    primaryKey({ columns: [table.modelId, table.channelId] }),
+    uniqueIndex("model_channels_model_channel_upstream_unique").on(
+      table.modelId,
+      table.channelId,
+      table.upstreamModel,
+    ),
     index("model_channels_schedule_idx").on(table.modelId, table.enabled, table.priority),
   ],
 );

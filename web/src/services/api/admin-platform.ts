@@ -44,6 +44,7 @@ export type AdminChannel = {
 };
 
 export type ModelChannelBinding = {
+    id: string;
     modelId: string;
     channelId: string;
     channelName: string;
@@ -58,7 +59,7 @@ export type ModelChannelBinding = {
 
 export type ModelInput = Pick<AdminModel, "name" | "displayName" | "capability" | "status"> & { sortOrder?: number; pricePerImage?: string | number | null; description?: string | null; config?: Record<string, unknown> };
 export type ChannelInput = Pick<AdminChannel, "name" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency"> & { cooldownSeconds?: number; apiKey?: string };
-export type BindingInput = Pick<ModelChannelBinding, "upstreamModel" | "priority" | "weight" | "enabled">;
+export type BindingInput = Pick<ModelChannelBinding, "upstreamModel" | "priority" | "weight" | "enabled"> & { id?: string };
 
 export async function getAdminModels() {
     return (await apiRequest<{ models: AdminModel[] }>("/api/admin/models")).models;
@@ -88,8 +89,12 @@ export async function saveModelChannelBinding(modelId: string, channelId: string
     await apiRequest(`/api/admin/models/${modelId}/channels/${channelId}`, { method: "PUT", body: input });
 }
 
-export async function deleteModelChannelBinding(modelId: string, channelId: string) {
-    await apiRequest<void>(`/api/admin/models/${modelId}/channels/${channelId}`, { method: "DELETE" });
+export async function batchSaveModelChannelBindings(modelId: string, input: { channelId: string; upstreamModels: string[]; priority?: number; weight?: number; enabled?: boolean }) {
+    return (await apiRequest<{ bindings: ModelChannelBinding[] }>(`/api/admin/models/${modelId}/channels/batch`, { method: "POST", body: input })).bindings;
+}
+
+export async function deleteModelChannelBinding(modelId: string, bindingId: string) {
+    await apiRequest<void>(`/api/admin/models/${modelId}/bindings/${bindingId}`, { method: "DELETE" });
 }
 
 export async function getAdminChannels() {

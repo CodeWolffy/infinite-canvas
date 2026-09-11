@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip } from "antd";
+import { App, Button, Checkbox, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
-import { KeyRound, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Zap } from "lucide-react";
+import { Cable, KeyRound, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Zap } from "lucide-react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
-import { createAdminChannel, createAdminModel, deleteAdminChannel, fetchAdminChannelModels, getAdminChannels, getAdminModels, saveModelChannelBinding, updateAdminChannel, type AdminChannel, type ChannelInput } from "@/services/api/admin-platform";
+import { batchSaveModelChannelBindings, createAdminChannel, createAdminModel, deleteAdminChannel, fetchAdminChannelModels, getAdminChannels, getAdminModels, saveModelChannelBinding, updateAdminChannel, type AdminChannel, type ChannelInput } from "@/services/api/admin-platform";
 
 type ChannelValues = Omit<ChannelInput, "timeoutMs"> & { timeoutSeconds: number; cooldownSeconds: number };
 type QuickModelValues = {
@@ -30,15 +30,18 @@ export default function AdminChannelsPage() {
     const [modelResult, setModelResult] = useState<{ channel: AdminChannel; models: string[]; checkedAt: string } | null>(null);
     const [modelSearch, setModelSearch] = useState("");
     const [configuringUpstream, setConfiguringUpstream] = useState<string | null>(null);
+    const [selectedModels, setSelectedModels] = useState<string[]>([]);
+    const [batchOpen, setBatchOpen] = useState(false);
     const [form] = Form.useForm<ChannelValues>();
     const [quickModelForm] = Form.useForm<QuickModelValues>();
+    const [batchForm] = Form.useForm<QuickModelValues>();
     const copyText = useCopyText();
     const channelsQuery = useQuery({ queryKey: ["admin", "channels"], queryFn: getAdminChannels });
     const modelsQuery = useQuery({ queryKey: ["admin", "models"], queryFn: getAdminModels, enabled: Boolean(modelResult) });
     const refresh = () => queryClient.invalidateQueries({ queryKey: ["admin", "channels"] });
     const saveMutation = useMutation({ mutationFn: (values: ChannelValues) => editing ? updateAdminChannel(editing.id, channelPayload(values)) : createAdminChannel(channelPayload(values) as ChannelInput), onSuccess: () => { void refresh(); setEditing(undefined); form.resetFields(); message.success(editing ? "渠道已更新" : "渠道已创建"); }, onError: notifyError(message.error) });
     const deleteMutation = useMutation({ mutationFn: deleteAdminChannel, onSuccess: () => { void refresh(); message.success("渠道已删除"); }, onError: notifyError(message.error) });
-    const modelsMutation = useMutation({ mutationFn: (channel: AdminChannel) => fetchAdminChannelModels(channel.id).then((result) => ({ channel, ...result })), onSuccess: ({ channel, models, health }) => { void refresh(); setModelSearch(""); setModelResult({ channel, models, checkedAt: health.checkedAt }); message.success("渠道连接正常"); }, onError: (error) => { void refresh(); message.error(error.message || "渠道连接失败"); } });
+    const modelsMutation = useMutation({ mutationFn: (channel: AdminChannel) => fetchAdminChannelModels(channel.id).then((result) => ({ channel, ...result })), onSuccess: ({ channel, models, health }) => { void refresh(); setModelSearch(""); setSelectedModels([]); setModelResult({ channel, models, checkedAt: health.checkedAt }); message.success("渠道连接正常"); }, onError: (error) => { void refresh(); message.error(error.message || "渠道连接失败"); } });
     const testMutation = useMutation({ mutationFn: (channel: AdminChannel) => fetchAdminChannelModels(channel.id), onSuccess: (result) => { void refresh(); message.success(`渠道连接正常，上游返回 ${result.models.length} 个模型`); }, onError: (error) => { void refresh(); message.error(error.message || "渠道连接失败"); } });
     const quickModelMutation = useMutation({
         mutationFn: async (values: QuickModelValues) => {
@@ -57,6 +60,27 @@ export default function AdminChannelsPage() {
             setConfiguringUpstream(null);
             quickModelForm.resetFields();
             message.success("平台模型与渠道已配置");
+        },
+        onError: notifyError(message.error),
+    });
+    const batchMutation = useMutation({
+        mutationFn: async (values: QuickModelValues) => {
+            if (!modelResult || selectedModels.length === 0) throw new Error("请选择上游模型");
+            let modelId = values.targetModelId;
+            if (modelId === createModelValue) {
+                if (!values.name || !values.displayName || !values.capability || !values.status) throw new Error("请完善平台模型信息");
+                const model = await createAdminModel({ name: values.name, displayName: values.displayName, capability: values.capability, status: values.status, pricePerImage: values.capability === "image" ? values.pricePerImage ?? null : null, description: null, config: {} });
+                modelId = model.id;
+            }
+            await batchSaveModelChannelBindings(modelId, { channelId: modelResult.channel.id, upstreamModels: selectedModels, priority: values.priority, weight: values.weight, enabled: values.enabled });
+        },
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: ["admin", "models"] });
+            void queryClient.invalidateQueries({ queryKey: ["admin", "model-bindings"] });
+            setBatchOpen(false);
+            setSelectedModels([]);
+            batchForm.resetFields();
+            message.success("已成功批量绑定渠道模型");
         },
         onError: notifyError(message.error),
     });
@@ -84,6 +108,8 @@ export default function AdminChannelsPage() {
         { title: "操作", key: "actions", fixed: "right", width: 265, render: (_, channel) => <Space><Button type="text" size="small" loading={testMutation.isPending && testMutation.variables?.id === channel.id} icon={<Zap className="size-3.5" />} onClick={() => testMutation.mutate(channel)}>测试</Button><Button type="text" size="small" loading={modelsMutation.isPending && modelsMutation.variables?.id === channel.id} icon={<Settings2 className="size-3.5" />} onClick={() => modelsMutation.mutate(channel)}>配置模型</Button><Button type="text" size="small" icon={<Pencil className="size-3.5" />} onClick={() => setEditing(channel)}>编辑</Button><Button type="text" danger size="small" icon={<Trash2 className="size-3.5" />} onClick={() => modal.confirm({ title: `删除 ${channel.name}？`, content: "删除后将解除与所有已配置模型的关联，且无法恢复。", okText: "删除", cancelText: "取消", okButtonProps: { danger: true }, onOk: () => deleteMutation.mutateAsync(channel.id) })} /></Space> },
     ];
     const filteredModels = [...new Set(modelResult?.models || [])].filter((name) => name.toLowerCase().includes(modelSearch.trim().toLowerCase()));
+    const allFilteredSelected = filteredModels.length > 0 && filteredModels.every((name) => selectedModels.includes(name));
+    const someFilteredSelected = filteredModels.some((name) => selectedModels.includes(name)) && !allFilteredSelected;
     const openQuickModel = (upstreamModel: string) => {
         const suggestedName = upstreamModel.slice(0, 120);
         const matchingModels = modelsQuery.data?.filter((model) => model.name === suggestedName) || [];
@@ -111,11 +137,55 @@ export default function AdminChannelsPage() {
                     <Space className="flex justify-end"><Button onClick={() => setEditing(undefined)}>取消</Button><Button type="primary" htmlType="submit" loading={saveMutation.isPending}>保存</Button></Space>
                 </Form>
             </Modal>
-            <Drawer title={`${modelResult?.channel.name || "渠道"} · 上游模型`} extra={<Button type="text" size="small" loading={modelsMutation.isPending} icon={<RefreshCw className="size-3.5" />} onClick={() => modelResult && modelsMutation.mutate(modelResult.channel)}>重新获取</Button>} open={Boolean(modelResult)} onClose={() => setModelResult(null)} width="min(680px, 100vw)">
+            <Drawer title={`${modelResult?.channel.name || "渠道"} · 上游模型`} extra={<Button type="text" size="small" loading={modelsMutation.isPending} icon={<RefreshCw className="size-3.5" />} onClick={() => modelResult && modelsMutation.mutate(modelResult.channel)}>重新获取</Button>} open={Boolean(modelResult)} onClose={() => { setModelResult(null); setSelectedModels([]); }} width="min(680px, 100vw)">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-sm text-stone-500"><span>共 {modelResult?.models.length || 0} 个模型，可直接创建或绑定平台模型</span><span className="text-xs">{modelResult ? dayjs(modelResult.checkedAt).format("YYYY-MM-DD HH:mm:ss") : ""}</span></div>
                 <Input allowClear value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} prefix={<Search className="size-4 text-stone-400" />} placeholder="搜索上游模型" />
-                <div className="mt-4 max-h-[calc(100vh-190px)] overflow-y-auto rounded-lg border border-stone-200 dark:border-stone-800">
-                    {filteredModels.length ? filteredModels.map((name) => <div key={name} className="flex items-center gap-4 border-b border-stone-100 px-4 py-3 last:border-b-0 dark:border-stone-800"><code className="min-w-0 flex-1 truncate text-xs text-stone-600 dark:text-stone-300" title={name}>{name}</code><Button type="text" size="small" icon={<Settings2 className="size-3.5" />} onClick={() => openQuickModel(name)}>配置</Button></div>) : <div className="py-12 text-center text-sm text-stone-500">{modelResult?.models.length ? "没有匹配的上游模型" : "上游没有返回可识别的模型"}</div>}
+                <div className="mt-3 flex items-center justify-between gap-2">
+                    <Checkbox
+                        indeterminate={someFilteredSelected}
+                        checked={allFilteredSelected}
+                        onChange={(e) => {
+                            if (e.target.checked) {
+                                setSelectedModels(Array.from(new Set([...selectedModels, ...filteredModels])));
+                            } else {
+                                setSelectedModels(selectedModels.filter((name) => !filteredModels.includes(name)));
+                            }
+                        }}
+                    >
+                        全选当前筛选 ({filteredModels.length})
+                    </Checkbox>
+                    {selectedModels.length > 0 && (
+                        <Button
+                            type="primary"
+                            size="small"
+                            icon={<Cable className="size-3.5" />}
+                            onClick={() => {
+                                batchForm.resetFields();
+                                batchForm.setFieldsValue({ priority: 0, weight: 100, enabled: true });
+                                setBatchOpen(true);
+                            }}
+                        >
+                            批量绑定平台模型 ({selectedModels.length})
+                        </Button>
+                    )}
+                </div>
+                <div className="mt-3 max-h-[calc(100vh-230px)] overflow-y-auto rounded-lg border border-stone-200 dark:border-stone-800">
+                    {filteredModels.length ? filteredModels.map((name) => (
+                        <div key={name} className="flex items-center gap-3 border-b border-stone-100 px-4 py-2.5 last:border-b-0 dark:border-stone-800">
+                            <Checkbox
+                                checked={selectedModels.includes(name)}
+                                onChange={(e) => {
+                                    if (e.target.checked) {
+                                        setSelectedModels([...selectedModels, name]);
+                                    } else {
+                                        setSelectedModels(selectedModels.filter((item) => item !== name));
+                                    }
+                                }}
+                            />
+                            <code className="min-w-0 flex-1 truncate text-xs text-stone-600 dark:text-stone-300" title={name}>{name}</code>
+                            <Button type="text" size="small" icon={<Settings2 className="size-3.5" />} onClick={() => openQuickModel(name)}>配置</Button>
+                        </div>
+                    )) : <div className="py-12 text-center text-sm text-stone-500">{modelResult?.models.length ? "没有匹配的上游模型" : "上游没有返回可识别的模型"}</div>}
                 </div>
             </Drawer>
             <Modal title="配置平台模型" open={Boolean(configuringUpstream)} footer={null} onCancel={() => setConfiguringUpstream(null)} destroyOnHidden width={560}>
@@ -130,6 +200,47 @@ export default function AdminChannelsPage() {
                     <div className="grid grid-cols-2 gap-4"><Form.Item name="priority" label="优先级" tooltip="数值越大越优先，适合配置主备渠道" rules={[{ required: true }]}><InputNumber className="w-full" precision={0} /></Form.Item><Form.Item name="weight" label="同级权重" tooltip="相同优先级的渠道按权重分流" rules={[{ required: true }]}><InputNumber className="w-full" min={1} precision={0} /></Form.Item></div>
                     <Form.Item name="enabled" label="启用此渠道" valuePropName="checked"><Switch /></Form.Item>
                     <Space className="flex justify-end"><Button onClick={() => setConfiguringUpstream(null)}>取消</Button><Button type="primary" htmlType="submit" loading={quickModelMutation.isPending}>保存配置</Button></Space>
+                </Form>
+            </Modal>
+            <Modal title={`批量绑定平台模型（已选 ${selectedModels.length} 个上游模型）`} open={batchOpen} footer={null} onCancel={() => setBatchOpen(false)} destroyOnHidden width={560}>
+                <div className="mb-4 max-h-32 overflow-y-auto rounded-lg bg-stone-50 p-2.5 dark:bg-stone-900">
+                    <div className="mb-1 text-xs text-stone-500">将以下选中的上游模型统一配置为同一个平台模型的后端候选：</div>
+                    <div className="flex flex-wrap gap-1.5">
+                        {selectedModels.map((name) => (
+                            <Tag key={name} className="text-xs">{name}</Tag>
+                        ))}
+                    </div>
+                </div>
+                <Form<QuickModelValues> form={batchForm} layout="vertical" requiredMark={false} onFinish={(values) => batchMutation.mutate(values)}>
+                    <Form.Item name="targetModelId" label="目标平台模型" rules={[{ required: true, message: "请选择平台模型" }]}>
+                        <Select showSearch optionFilterProp="label" loading={modelsQuery.isLoading} placeholder="请选择要绑定的平台模型" options={[{ value: createModelValue, label: "＋ 创建新平台模型" }, ...(modelsQuery.data || []).map((model) => ({ value: model.id, label: `${model.displayName} · ${model.name}` }))]} />
+                    </Form.Item>
+                    <Form.Item noStyle shouldUpdate={(previous, current) => previous.targetModelId !== current.targetModelId}>
+                        {({ getFieldValue }) => getFieldValue("targetModelId") === createModelValue ? (
+                            <>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <Form.Item name="displayName" label="显示名称" rules={[{ required: true, message: "请输入显示名称" }, { max: 120 }]}><Input placeholder="例如 GPT Image 2.5" /></Form.Item>
+                                    <Form.Item name="name" label="模型标识" extra="可与其他公开模型相同。" rules={[{ required: true, message: "请输入模型标识" }, { max: 120 }]}><Input placeholder="例如 gpt-image-2.5" /></Form.Item>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <Form.Item name="capability" label="能力" rules={[{ required: true }]} initialValue="image"><Select options={[{ value: "image", label: "图片" }, { value: "text", label: "文本" }]} /></Form.Item>
+                                    <Form.Item name="status" label="发布状态" rules={[{ required: true }]} initialValue="draft"><Select options={[{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "disabled", label: "已停用" }]} /></Form.Item>
+                                </div>
+                                <Form.Item noStyle shouldUpdate={(previous, current) => previous.capability !== current.capability}>
+                                    {({ getFieldValue: getValue }) => getValue("capability") === "image" ? <Form.Item name="pricePerImage" label="价格（元 / 张）"><InputNumber className="w-full" min={0} precision={6} /></Form.Item> : null}
+                                </Form.Item>
+                            </>
+                        ) : null}
+                    </Form.Item>
+                    <div className="grid grid-cols-2 gap-4">
+                        <Form.Item name="priority" label="优先级" tooltip="数值越大越优先，适合配置主备渠道" rules={[{ required: true }]} initialValue={0}><InputNumber className="w-full" precision={0} /></Form.Item>
+                        <Form.Item name="weight" label="同级权重" tooltip="相同优先级的渠道按权重分流" rules={[{ required: true }]} initialValue={100}><InputNumber className="w-full" min={1} precision={0} /></Form.Item>
+                    </div>
+                    <Form.Item name="enabled" label="启用此渠道绑定" valuePropName="checked" initialValue={true}><Switch defaultChecked /></Form.Item>
+                    <Space className="flex justify-end">
+                        <Button onClick={() => setBatchOpen(false)}>取消</Button>
+                        <Button type="primary" htmlType="submit" loading={batchMutation.isPending}>确认批量绑定</Button>
+                    </Space>
                 </Form>
             </Modal>
         </div>

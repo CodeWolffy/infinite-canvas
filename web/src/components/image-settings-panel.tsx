@@ -9,9 +9,11 @@ import type { AiConfig } from "@/stores/use-config-store";
 
 const qualityOptions = [
     { value: "auto", labelKey: "auto" },
-    { value: "high", labelKey: "high" },
-    { value: "medium", labelKey: "medium" },
     { value: "low", labelKey: "low" },
+    { value: "medium", labelKey: "medium" },
+    { value: "high", labelKey: "high" },
+    { value: "xhigh", labelKey: "xhigh" },
+    { value: "max", labelKey: "max" },
 ];
 const DIMENSION_STEP = 16;
 
@@ -161,7 +163,7 @@ export function ImageSettingsTheme({ theme, children }: { theme: CanvasTheme; ch
 }
 
 export function imageQualityLabel(value: string) {
-    return (["auto", "high", "medium", "low"].includes(value) ? i18n.t(`settingsPanels.common.${value}`) : value);
+    return (["auto", "low", "medium", "high", "xhigh", "max"].includes(value) ? i18n.t(`settingsPanels.common.${value}`) : value);
 }
 
 export function imageSizeLabel(size: string) {

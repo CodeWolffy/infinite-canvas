@@ -114,6 +114,8 @@ const QUALITY_BASE: Record<string, number> = {
     low: 1024,
     medium: 2048,
     high: 2880,
+    xhigh: 2880,
+    max: 2880,
     standard: 1024,
     hd: 2048,
 };
@@ -121,6 +123,8 @@ const QUALITY_ALIASES: Record<string, string> = {
     "1k": "low",
     "2k": "medium",
     "4k": "high",
+    "very high": "xhigh",
+    "very_high": "xhigh",
 };
 const DEFAULT_IMAGE_SHORT_SIDE = 1024;
 const IMAGE_SIZE_STEP = 16;
@@ -131,7 +135,7 @@ const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
 
 const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
-const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
+const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", xhigh: "4K", max: "4K", standard: "1K", hd: "2K" };
 const BATCH_POLL_BASE_MS = 700;
 const BATCH_POLL_MAX_MS = 3000;
 const BATCH_MAX_WAIT_MS = 10 * 60 * 1000;
@@ -150,7 +154,7 @@ function normalizeBackground(background: string | undefined) {
 /** Map "quality + ratio" to an explicit pixel dimension like "3840x2160". */
 function resolveSize(quality: string | undefined, ratio: string): string {
     const parsedRatio = parseImageRatio(ratio);
-    const scale = quality === "high" ? "4k" : quality === "medium" || quality === "hd" ? "2k" : "1k";
+    const scale = quality === "high" || quality === "xhigh" || quality === "max" ? "4k" : quality === "medium" || quality === "hd" ? "2k" : "1k";
     const preset = imageSizePresets[scale][ratio];
     if (preset) return preset;
     const basePixels = quality ? QUALITY_BASE[quality] : undefined;
@@ -790,7 +794,7 @@ export async function requestDirectEdit(config: AiConfig, prompt: string, refere
     formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));
     formData.set("n", String(n));
     // gpt-image models reject response_format; they always return b64.
-    if (!/gpt-image/.test(requestConfig.model)) {
+    if (!/(gpt-image|image-2)/i.test(requestConfig.model)) {
         formData.set("response_format", "b64_json");
     }
     formData.set("output_format", IMAGE_OUTPUT_FORMAT);

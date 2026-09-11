@@ -71,7 +71,7 @@ function resolveGeminiImageSize(quality: unknown, dimensions: { width: number; h
   const value = typeof quality === "string" ? quality.trim().toLowerCase() : "";
   if (value === "low" || value === "standard" || value === "1k") return "1K";
   if (value === "medium" || value === "hd" || value === "2k") return "2K";
-  if (value === "high" || value === "4k") return "4K";
+  if (value === "high" || value === "xhigh" || value === "max" || value === "4k") return "4K";
   return dimensions ? geminiImageSizeFromEdge(Math.max(dimensions.width, dimensions.height)) : undefined;
 }
 
@@ -327,7 +327,7 @@ export async function generateImage(
     const safeParameters = openAIParameters(parameters, ["model", "prompt", "n", "response_format", "image", "image[]"]);
     const headers = candidate.apiKey ? { Authorization: `Bearer ${candidate.apiKey}` } : undefined;
     if (references.length) {
-      const isGptImage = /^gpt-image/i.test(candidate.upstreamModel);
+      const isGptImage = /^(gpt-image|image-2)/i.test(candidate.upstreamModel);
       const form = new FormData();
       for (const [key, value] of Object.entries(safeParameters)) {
         if (value !== undefined && value !== null) form.set(key, String(value));
@@ -348,7 +348,7 @@ export async function generateImage(
       });
       return decodeImageResponse(response);
     }
-    const isGptImage = /^gpt-image/i.test(candidate.upstreamModel);
+    const isGptImage = /^(gpt-image|image-2)/i.test(candidate.upstreamModel);
     const response = await upstreamJson(candidate, endpoint(candidate.baseUrl, "images/generations"), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...headers },

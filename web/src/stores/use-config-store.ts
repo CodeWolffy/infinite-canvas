@@ -174,8 +174,10 @@ export function guessCapability(name: string): ModelCapability {
 function findChannelModel(config: AiConfig, value: string): { channel: ModelChannel; model: ChannelModel } | null {
     const decoded = decodeChannelModel(value);
     const name = decoded?.model || value;
-    const channel = decoded ? config.channels.find((item) => item.id === decoded.channelId) : config.channels.find((item) => item.models.some((model) => model.name === name));
-    const model = channel?.models.find((item) => item.name === name);
+    const channel = decoded
+        ? config.channels.find((item) => item.id === decoded.channelId)
+        : config.channels.find((item) => item.models.some((model) => model.name === name || model.displayName === name));
+    const model = channel?.models.find((item) => item.name === name || item.displayName === name);
     return channel && model ? { channel, model } : null;
 }
 
@@ -352,7 +354,8 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
         const capability = typeof item === "string" ? guessCapability(name) : item.capability || guessCapability(name);
         const displayName = typeof item === "string" ? undefined : item.displayName?.trim() || undefined;
         const script = typeof item === "string" ? undefined : item.script?.trim() || undefined;
-        result.push({ name, capability, displayName, script });
+        const pricePerImage = typeof item === "string" ? undefined : item.pricePerImage;
+        result.push({ name, capability, displayName, script, pricePerImage });
     }
     return result;
 }
@@ -453,19 +456,24 @@ export function modelOptionName(value: string) {
 
 export function modelOptionLabel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
-    if (!decoded) return value;
-    const channel = config.channels.find((item) => item.id === decoded.channelId);
-    const model = channel?.models.find((item) => item.name === decoded.model);
-    if (channel?.id === PLATFORM_CHANNEL_ID) return model?.displayName || decoded.model;
-    return channel ? `${model?.displayName || decoded.model}（${channel.name}）` : decoded.model;
+    const name = decoded?.model || value;
+    const channel = decoded
+        ? config.channels.find((item) => item.id === decoded.channelId)
+        : config.channels.find((item) => item.models.some((model) => model.name === name || model.displayName === name));
+    const model = channel?.models.find((item) => item.name === name || item.displayName === name);
+    if (!model) return decoded?.model || value;
+    if (channel?.id === PLATFORM_CHANNEL_ID) return model.displayName || model.name;
+    return channel ? `${model.displayName || model.name}（${channel.name}）` : model.name;
 }
 
 export function modelOptionPrice(config: AiConfig, value: string): string | null {
     const decoded = decodeChannelModel(value);
-    if (!decoded) return null;
-    const channel = config.channels.find((item) => item.id === decoded.channelId);
-    const model = channel?.models.find((item) => item.name === decoded.model);
-    if (model?.pricePerImage === null || model?.pricePerImage === undefined || model?.pricePerImage === "") return null;
+    const name = decoded?.model || value;
+    const channel = decoded
+        ? config.channels.find((item) => item.id === decoded.channelId)
+        : config.channels.find((item) => item.models.some((model) => model.name === name || model.displayName === name));
+    const model = channel?.models.find((item) => item.name === name || item.displayName === name);
+    if (!model || model.pricePerImage === null || model.pricePerImage === undefined || model.pricePerImage === "") return null;
     const num = Number(model.pricePerImage);
     if (isNaN(num)) return null;
     const formatted = Number.isInteger(num * 100) ? num.toFixed(2) : num.toString();

@@ -60,10 +60,11 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
             >
                 <ModelIcon config={config} model={current} />
                 <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelOptionLabel(config, current) : pickerPlaceholder}</span>
+                {currentPrice ? <span className="shrink-0 font-mono text-xs text-muted-foreground/80">{currentPrice}</span> : null}
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
-                className="z-[1200] w-[22rem] max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
+                className="z-[1200] min-w-[20rem] max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
                 position="popper"
                 align="start"
                 side="bottom"
@@ -102,7 +103,7 @@ function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
                 <span className="truncate">{modelOptionLabel(config, model)}</span>
             </span>
             {price ? (
-                <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/80">
+                <span className="shrink-0 rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[11px] font-medium text-stone-600 dark:bg-stone-800 dark:text-stone-300">
                     {price}
                 </span>
             ) : null}

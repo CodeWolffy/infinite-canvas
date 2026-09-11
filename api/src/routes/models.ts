@@ -59,6 +59,7 @@ export async function modelRoutes(app: FastifyInstance) {
         capability: models.capability,
         sortOrder: models.sortOrder,
         description: models.description,
+        pricePerImage: models.pricePerImage,
       })
       .from(models)
       .where(and(eq(models.status, "published"), isNull(models.deletedAt)))

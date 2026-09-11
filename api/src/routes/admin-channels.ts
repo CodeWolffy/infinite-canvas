@@ -1,10 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { authenticate } from "../auth/session.js";
 import { decryptSecret, encryptSecret, secretHint } from "../crypto.js";
 import { db } from "../db/client.js";
-import { channels } from "../db/schema.js";
+import { channels, modelChannels } from "../db/schema.js";
 import { finishRequestLog, startRequestLog } from "../request-logs.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() });
@@ -72,7 +72,7 @@ export async function adminChannelRoutes(app: FastifyInstance) {
   });
 
   app.get("/", async (_request, _reply) => {
-    const result = await db.select().from(channels).orderBy(asc(channels.name));
+    const result = await db.select().from(channels).where(isNull(channels.deletedAt)).orderBy(asc(channels.name));
     const attempts = await db.execute(sql`
       select distinct on (channel_id)
         channel_id, status, duration_ms, http_status, error_category, error_message,
@@ -107,7 +107,7 @@ export async function adminChannelRoutes(app: FastifyInstance) {
     const admin = await authenticate(request, reply, { admin: true });
     if (!admin) return;
     const { id } = paramsSchema.parse(request.params);
-    const [channel] = await db.select().from(channels).where(eq(channels.id, id)).limit(1);
+    const [channel] = await db.select().from(channels).where(and(eq(channels.id, id), isNull(channels.deletedAt))).limit(1);
     if (!channel) return reply.code(404).send({ error: "not_found", message: "渠道不存在" });
     return { channel: publicChannel(channel) };
   });
@@ -128,7 +128,7 @@ export async function adminChannelRoutes(app: FastifyInstance) {
     const [channel] = await db
       .update(channels)
       .set({ ...channelValues(body), updatedAt: new Date() })
-      .where(eq(channels.id, id))
+      .where(and(eq(channels.id, id), isNull(channels.deletedAt)))
       .returning();
     if (!channel) return reply.code(404).send({ error: "not_found", message: "渠道不存在" });
     return { channel: publicChannel(channel) };
@@ -138,7 +138,16 @@ export async function adminChannelRoutes(app: FastifyInstance) {
     const admin = await authenticate(request, reply, { admin: true });
     if (!admin) return;
     const { id } = paramsSchema.parse(request.params);
-    const [channel] = await db.delete(channels).where(eq(channels.id, id)).returning({ id: channels.id });
+    const channel = await db.transaction(async (tx) => {
+      const [deleted] = await tx
+        .update(channels)
+        .set({ status: "disabled", deletedAt: new Date(), updatedAt: new Date() })
+        .where(and(eq(channels.id, id), isNull(channels.deletedAt)))
+        .returning({ id: channels.id });
+      if (!deleted) return undefined;
+      await tx.delete(modelChannels).where(eq(modelChannels.channelId, id));
+      return deleted;
+    });
     if (!channel) return reply.code(404).send({ error: "not_found", message: "渠道不存在" });
     return reply.code(204).send();
   });
@@ -151,7 +160,7 @@ export async function adminChannelRoutes(app: FastifyInstance) {
     const [channel] = await db
       .update(channels)
       .set({ status, ...(status === "active" ? { cooldownUntil: null } : {}), updatedAt: new Date() })
-      .where(eq(channels.id, id))
+      .where(and(eq(channels.id, id), isNull(channels.deletedAt)))
       .returning();
     if (!channel) return reply.code(404).send({ error: "not_found", message: "渠道不存在" });
     return { channel: publicChannel(channel) };
@@ -161,7 +170,7 @@ export async function adminChannelRoutes(app: FastifyInstance) {
     const admin = await authenticate(request, reply, { admin: true });
     if (!admin) return;
     const { id } = paramsSchema.parse(request.params);
-    const [channel] = await db.select().from(channels).where(eq(channels.id, id)).limit(1);
+    const [channel] = await db.select().from(channels).where(and(eq(channels.id, id), isNull(channels.deletedAt))).limit(1);
     if (!channel) return reply.code(404).send({ error: "not_found", message: "渠道不存在" });
 
     const apiKey = channel.encryptedApiKey ? decryptSecret(channel.encryptedApiKey) : undefined;

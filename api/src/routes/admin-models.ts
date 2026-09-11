@@ -128,7 +128,7 @@ export async function adminModelRoutes(app: FastifyInstance) {
       })
       .from(modelChannels)
       .innerJoin(channels, eq(channels.id, modelChannels.channelId))
-      .where(eq(modelChannels.modelId, id));
+      .where(and(eq(modelChannels.modelId, id), isNull(channels.deletedAt)));
     return { bindings };
   });
 

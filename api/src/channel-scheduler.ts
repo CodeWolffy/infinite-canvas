@@ -39,6 +39,7 @@ export async function hasChannelCandidates(modelId: string, channelId?: string) 
         channelId ? eq(channels.id, channelId) : undefined,
         eq(modelChannels.enabled, true),
         eq(channels.status, "active"),
+        isNull(channels.deletedAt),
         or(isNull(channels.cooldownUntil), lte(channels.cooldownUntil, new Date())),
       ),
     )
@@ -75,6 +76,7 @@ export async function getChannelCandidates(modelId: string) {
         eq(modelChannels.modelId, modelId),
         eq(modelChannels.enabled, true),
         eq(channels.status, "active"),
+        isNull(channels.deletedAt),
         or(isNull(channels.cooldownUntil), lte(channels.cooldownUntil, new Date())),
       ),
     )

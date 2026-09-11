@@ -249,3 +249,9 @@ test("cooldown expiry permits recovery and clears the previous error", async () 
   assert.equal(recovered.cooldownUntil, null);
   assert.equal(recovered.lastErrorCode, null);
 });
+
+test("soft-deleted channels are ignored by the scheduler", async () => {
+  await db.update(channels).set({ deletedAt: new Date(), status: "disabled" }).where(eq(channels.id, channelIds[0]));
+  const result = await runWithFailover(modelId, async (candidate) => candidate.channelId);
+  assert.equal(result.result, channelIds[1]);
+});

@@ -112,6 +112,7 @@ export const channels = pgTable("channels", {
   lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
   lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
   lastErrorCode: varchar("last_error_code", { length: 80 }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   ...timestamps(),
 });
 

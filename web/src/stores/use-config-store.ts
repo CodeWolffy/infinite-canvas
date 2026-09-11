@@ -16,6 +16,7 @@ export type ChannelModel = {
     capability: ModelCapability;
     displayName?: string;
     script?: string;
+    pricePerImage?: string | null;
 };
 
 export type ModelChannel = {
@@ -216,7 +217,7 @@ function platformConfig(config: AiConfig, models: PublicModel[]): AiConfig {
     // Platform models are selected by UUID. Their public identifiers may be
     // shared by variants (for example, standard and 4K models routing to the
     // same upstream model), while the display name remains user-facing.
-    const platformModels = models.map((model) => ({ name: model.id, displayName: model.displayName, capability: model.capability }));
+    const platformModels = models.map((model) => ({ name: model.id, displayName: model.displayName, capability: model.capability, pricePerImage: model.pricePerImage }));
     const channel = createModelChannel({ id: PLATFORM_CHANNEL_ID, name: "平台模型", baseUrl: "", apiKey: "", models: platformModels });
     const imageModel = platformModels.find((model) => model.capability === "image");
     const textModel = platformModels.find((model) => model.capability === "text");
@@ -457,6 +458,18 @@ export function modelOptionLabel(config: AiConfig, value: string) {
     const model = channel?.models.find((item) => item.name === decoded.model);
     if (channel?.id === PLATFORM_CHANNEL_ID) return model?.displayName || decoded.model;
     return channel ? `${model?.displayName || decoded.model}（${channel.name}）` : decoded.model;
+}
+
+export function modelOptionPrice(config: AiConfig, value: string): string | null {
+    const decoded = decodeChannelModel(value);
+    if (!decoded) return null;
+    const channel = config.channels.find((item) => item.id === decoded.channelId);
+    const model = channel?.models.find((item) => item.name === decoded.model);
+    if (model?.pricePerImage === null || model?.pricePerImage === undefined || model?.pricePerImage === "") return null;
+    const num = Number(model.pricePerImage);
+    if (isNaN(num)) return null;
+    const formatted = Number.isInteger(num * 100) ? num.toFixed(2) : num.toString();
+    return `¥${formatted} / 张`;
 }
 
 export function modelOptionsFromChannels(channels: ModelChannel[]) {

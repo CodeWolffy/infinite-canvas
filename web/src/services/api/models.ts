@@ -7,6 +7,7 @@ export type PublicModel = {
     capability: "image" | "text";
     sortOrder: number;
     description: string | null;
+    pricePerImage?: string | null;
 };
 
 export async function listModels() {

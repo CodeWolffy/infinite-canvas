@@ -4,9 +4,10 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import type { AiConfig, ReasoningEffort } from "@/stores/use-config-store";
+import { modelReasoningOptions, reasoningEffortLabel, resolveReasoningEffort } from "@/lib/model-reasoning";
+import { findChannelModel, type AiConfig, type ReasoningEffort } from "@/stores/use-config-store";
 
-const reasoningEffortOptions: ReasoningEffort[] = ["auto", "low", "medium", "high", "xhigh"];
+export { reasoningEffortLabel } from "@/lib/model-reasoning";
 
 type TextSettingsPanelProps = {
     config: AiConfig;
@@ -17,6 +18,9 @@ type TextSettingsPanelProps = {
 
 export function TextSettingsPanel({ config, onConfigChange, theme, className = "space-y-4" }: TextSettingsPanelProps) {
     const { t } = useTranslation();
+    const model = findChannelModel(config, config.model || config.textModel)?.model;
+    const effort = resolveReasoningEffort(model, config.reasoningEffort);
+    const options = modelReasoningOptions(model);
     return (
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
@@ -25,10 +29,10 @@ export function TextSettingsPanel({ config, onConfigChange, theme, className = "
                     <div className="text-sm font-medium" style={{ color: theme.node.muted }}>
                         {t("settingsPanels.text.reasoning")}
                     </div>
-                    <div className="grid grid-cols-5 gap-2">
-                        {reasoningEffortOptions.map((value) => (
-                            <OptionPill key={value} selected={config.reasoningEffort === value} theme={theme} onClick={() => onConfigChange("reasoningEffort", value)}>
-                                {t(`settingsPanels.common.${value}`)}
+                    <div className="grid grid-cols-4 gap-2">
+                        {options.map(({ value, label }) => (
+                            <OptionPill key={value} selected={effort === value} theme={theme} onClick={() => onConfigChange("reasoningEffort", value)}>
+                                {label}
                             </OptionPill>
                         ))}
                     </div>
@@ -36,10 +40,6 @@ export function TextSettingsPanel({ config, onConfigChange, theme, className = "
             </div>
         </ImageSettingsTheme>
     );
-}
-
-export function reasoningEffortLabel(value: ReasoningEffort) {
-    return reasoningEffortOptions.includes(value) ? i18n.t(`settingsPanels.common.${value}`) : value;
 }
 
 function OptionPill({ selected, theme, onClick, children }: { selected: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {

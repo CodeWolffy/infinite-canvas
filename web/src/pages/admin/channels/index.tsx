@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Checkbox, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip } from "antd";
+import { useSearchParams } from "react-router-dom";
+import { App, Button, Checkbox, Drawer, Form, Input, InputNumber, Modal, Segmented, Select, Space, Switch, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { Cable, KeyRound, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Zap } from "lucide-react";
@@ -26,6 +27,8 @@ const createModelValue = "__create_model__";
 export default function AdminChannelsPage() {
     const { message, modal } = App.useApp();
     const queryClient = useQueryClient();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const capabilityTab = (searchParams.get("type") === "text" ? "text" : "image") as "image" | "text";
     const [editing, setEditing] = useState<AdminChannel | null | undefined>(undefined);
     const [modelResult, setModelResult] = useState<{ channel: AdminChannel; models: string[]; checkedAt: string } | null>(null);
     const [modelSearch, setModelSearch] = useState("");
@@ -88,11 +91,12 @@ export default function AdminChannelsPage() {
     useEffect(() => {
         if (editing === undefined) return;
         form.resetFields();
-        form.setFieldsValue(editing ? { name: editing.name, protocol: editing.protocol, baseUrl: editing.baseUrl, status: editing.status, timeoutSeconds: editing.timeoutMs / 1000, maxConcurrency: editing.maxConcurrency, cooldownSeconds: editing.cooldownSeconds ?? 120, apiKey: undefined } : { protocol: "openai", status: "disabled", timeoutSeconds: 480, maxConcurrency: 1, cooldownSeconds: 120 });
-    }, [editing, form]);
+        form.setFieldsValue(editing ? { name: editing.name, capability: editing.capability || "image", protocol: editing.protocol, baseUrl: editing.baseUrl, status: editing.status, timeoutSeconds: editing.timeoutMs / 1000, maxConcurrency: editing.maxConcurrency, cooldownSeconds: editing.cooldownSeconds ?? 120, apiKey: undefined } : { capability: capabilityTab, protocol: "openai", status: "disabled", timeoutSeconds: 480, maxConcurrency: 1, cooldownSeconds: 120 });
+    }, [editing, form, capabilityTab]);
 
     const columns: TableColumnsType<AdminChannel> = [
         { title: "渠道", key: "channel", width: 152, render: (_, channel) => <div><div className="font-medium text-stone-950 dark:text-stone-100">{channel.name}</div><div className="text-xs uppercase text-stone-500">{channel.protocol}</div></div> },
+        { title: "能力", dataIndex: "capability", width: 80, render: (value: string) => value === "text" ? "文本" : "图片" },
         { title: "接口地址", dataIndex: "baseUrl", width: 221, ellipsis: true, render: (value: string) => <span className="text-stone-500" title={value}>{value}</span> },
         { title: "密钥", key: "secret", width: 130, render: (_, channel) => channel.apiKeyConfigured ? <span className="inline-flex items-center gap-1.5 text-xs text-stone-500"><KeyRound className="size-3.5" />{channel.apiKeyHint || "已配置"}</span> : <Tag color="orange">未配置</Tag> },
         { title: "并发", dataIndex: "maxConcurrency", width: 65 },
@@ -110,23 +114,42 @@ export default function AdminChannelsPage() {
     const filteredModels = [...new Set(modelResult?.models || [])].filter((name) => name.toLowerCase().includes(modelSearch.trim().toLowerCase()));
     const allFilteredSelected = filteredModels.length > 0 && filteredModels.every((name) => selectedModels.includes(name));
     const someFilteredSelected = filteredModels.some((name) => selectedModels.includes(name)) && !allFilteredSelected;
+    const matchingPlatformModels = (modelsQuery.data || []).filter((model) => model.capability === (modelResult?.channel.capability || "image"));
+    const visibleChannels = (channelsQuery.data || []).filter((channel) => (channel.capability || "image") === capabilityTab);
     const openQuickModel = (upstreamModel: string) => {
         const suggestedName = upstreamModel.slice(0, 120);
-        const matchingModels = modelsQuery.data?.filter((model) => model.name === suggestedName) || [];
+        const channelCap = modelResult?.channel.capability || "image";
+        const matchingModels = (modelsQuery.data || []).filter((model) => model.name === suggestedName && model.capability === channelCap);
         const matchedModel = matchingModels.length === 1 ? matchingModels[0] : undefined;
         quickModelForm.resetFields();
-        quickModelForm.setFieldsValue({ targetModelId: matchedModel?.id || createModelValue, name: suggestedName, displayName: suggestedName, capability: "image", status: "draft", priority: 0, weight: 100, enabled: true });
+        quickModelForm.setFieldsValue({ targetModelId: matchedModel?.id || createModelValue, name: suggestedName, displayName: suggestedName, capability: channelCap, status: "draft", priority: 0, weight: 100, enabled: true });
         setConfiguringUpstream(upstreamModel);
     };
 
     return (
         <div className="w-full px-6 py-6 lg:px-8 lg:py-8">
-            <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Provider routing</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">渠道管理</h1><p className="mt-1 text-sm text-stone-500">维护上游接口、密钥、超时、单渠道并发和故障冷却期，密钥原值不会回显。</p></div><Button className="shrink-0" type="primary" icon={<Plus className="size-4" />} onClick={() => setEditing(null)}>创建渠道</Button></div>
-            <div className="mt-6 overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800"><Table<AdminChannel> rowKey="id" columns={columns} dataSource={channelsQuery.data || []} loading={channelsQuery.isLoading} pagination={false} scroll={{ x: 1365 }} /></div>
-            <Modal title={editing ? "编辑渠道" : "创建渠道"} open={editing !== undefined} footer={null} onCancel={() => setEditing(undefined)} destroyOnHidden>
+            <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Provider routing</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-stone-950 dark:text-stone-100">渠道管理</h1><p className="mt-1 text-sm text-stone-500">维护上游接口、密钥、超时、单渠道并发和故障冷却期，密钥原值不会回显。</p></div><Button className="shrink-0" type="primary" icon={<Plus className="size-4" />} onClick={() => setEditing(null)}>创建{capabilityTab === "text" ? "文本" : "图片"}渠道</Button></div>
+            <div className="mt-6 overflow-hidden rounded-xl border border-stone-200 bg-background dark:border-stone-800">
+                <div className="border-b border-stone-200 p-4 dark:border-stone-800">
+                    <Segmented
+                        value={capabilityTab}
+                        onChange={(val) => setSearchParams({ type: String(val) })}
+                        options={[
+                            { value: "image", label: `图片渠道 (${(channelsQuery.data || []).filter((c) => (c.capability || "image") === "image").length})` },
+                            { value: "text", label: `文本渠道 (${(channelsQuery.data || []).filter((c) => c.capability === "text").length})` },
+                        ]}
+                    />
+                </div>
+                <Table<AdminChannel> rowKey="id" columns={columns} dataSource={visibleChannels} loading={channelsQuery.isLoading} pagination={false} scroll={{ x: 1365 }} />
+            </div>
+            <Modal title={editing ? "编辑渠道" : `创建${capabilityTab === "text" ? "文本" : "图片"}渠道`} open={editing !== undefined} footer={null} onCancel={() => setEditing(undefined)} destroyOnHidden>
                 <Form<ChannelValues> form={form} layout="vertical" requiredMark={false} className="pt-3" onFinish={(values) => saveMutation.mutate(values)}>
                     <Form.Item name="name" label="渠道名称" rules={[{ required: true, message: "请输入渠道名称" }]}><Input /></Form.Item>
-                    <div className="grid grid-cols-2 gap-4"><Form.Item name="protocol" label="协议" rules={[{ required: true }]}><Select options={[{ value: "openai", label: "OpenAI 兼容" }, { value: "gemini", label: "Gemini" }]} /></Form.Item><Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "disabled", label: "停用" }, { value: "active", label: "启用" }, { value: "needs_attention", label: "需检查" }]} /></Form.Item></div>
+                    <div className="grid grid-cols-3 gap-4">
+                        <Form.Item name="capability" label="能力" rules={[{ required: true }]}><Select options={[{ value: "image", label: "图片" }, { value: "text", label: "文本" }]} /></Form.Item>
+                        <Form.Item name="protocol" label="协议" rules={[{ required: true }]}><Select options={[{ value: "openai", label: "OpenAI 兼容" }, { value: "gemini", label: "Gemini" }]} /></Form.Item>
+                        <Form.Item name="status" label="状态" rules={[{ required: true }]}><Select options={[{ value: "disabled", label: "停用" }, { value: "active", label: "启用" }, { value: "needs_attention", label: "需检查" }]} /></Form.Item>
+                    </div>
                     <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: "请输入 Base URL" }, { type: "url", message: "请输入有效 URL" }]}><Input placeholder="https://api.example.com/v1" /></Form.Item>
                     <Form.Item name="apiKey" label={editing?.apiKeyConfigured ? "替换 API Key" : "API Key"} extra={editing?.apiKeyConfigured ? `当前密钥：${editing.apiKeyHint || "已配置"}。留空表示保持不变。` : "密钥只会提交到服务端加密保存，不会在页面回显。"}><Input.Password autoComplete="new-password" placeholder={editing?.apiKeyConfigured ? "留空则不替换" : "请输入 API Key（如上游需要）"} /></Form.Item>
                     <div className="grid grid-cols-3 gap-4">
@@ -191,7 +214,7 @@ export default function AdminChannelsPage() {
             <Modal title="配置平台模型" open={Boolean(configuringUpstream)} footer={null} onCancel={() => setConfiguringUpstream(null)} destroyOnHidden width={560}>
                 <div className="mb-4 rounded-lg bg-stone-50 px-3 py-2.5 dark:bg-stone-900"><div className="text-xs text-stone-500">上游模型</div><code className="mt-1 block break-all text-xs text-stone-800 dark:text-stone-200">{configuringUpstream}</code></div>
                 <Form<QuickModelValues> form={quickModelForm} layout="vertical" requiredMark={false} onFinish={(values) => quickModelMutation.mutate(values)}>
-                    <Form.Item name="targetModelId" label="平台模型" extra="只有唯一同名平台模型会自动选中；存在多个同名变体时请手动选择，也可以创建新模型。" rules={[{ required: true, message: "请选择平台模型" }]}><Select showSearch optionFilterProp="label" loading={modelsQuery.isLoading} options={[{ value: createModelValue, label: "＋ 创建新平台模型" }, ...(modelsQuery.data || []).map((model) => ({ value: model.id, label: `${model.displayName} · ${model.name}` }))]} /></Form.Item>
+                    <Form.Item name="targetModelId" label="平台模型" extra="只有唯一同名平台模型会自动选中；存在多个同名变体时请手动选择，也可以创建新模型。" rules={[{ required: true, message: "请选择平台模型" }]}><Select showSearch optionFilterProp="label" loading={modelsQuery.isLoading} options={[{ value: createModelValue, label: "＋ 创建新平台模型" }, ...matchingPlatformModels.map((model) => ({ value: model.id, label: `${model.displayName} · ${model.name}` }))]} /></Form.Item>
                     <Form.Item noStyle shouldUpdate={(previous, current) => previous.targetModelId !== current.targetModelId}>{({ getFieldValue }) => getFieldValue("targetModelId") === createModelValue ? <>
                         <div className="grid grid-cols-2 gap-4"><Form.Item name="displayName" label="显示名称" rules={[{ required: true, message: "请输入显示名称" }, { max: 120 }]}><Input /></Form.Item><Form.Item name="name" label="模型标识" extra="可与其他公开模型相同。" rules={[{ required: true, message: "请输入模型标识" }, { max: 120 }]}><Input /></Form.Item></div>
                         <div className="grid grid-cols-2 gap-4"><Form.Item name="capability" label="能力" rules={[{ required: true }]}><Select options={[{ value: "image", label: "图片" }, { value: "text", label: "文本" }]} /></Form.Item><Form.Item name="status" label="发布状态" rules={[{ required: true }]}><Select options={[{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "disabled", label: "已停用" }]} /></Form.Item></div>
@@ -213,7 +236,7 @@ export default function AdminChannelsPage() {
                 </div>
                 <Form<QuickModelValues> form={batchForm} layout="vertical" requiredMark={false} onFinish={(values) => batchMutation.mutate(values)}>
                     <Form.Item name="targetModelId" label="目标平台模型" rules={[{ required: true, message: "请选择平台模型" }]}>
-                        <Select showSearch optionFilterProp="label" loading={modelsQuery.isLoading} placeholder="请选择要绑定的平台模型" options={[{ value: createModelValue, label: "＋ 创建新平台模型" }, ...(modelsQuery.data || []).map((model) => ({ value: model.id, label: `${model.displayName} · ${model.name}` }))]} />
+                        <Select showSearch optionFilterProp="label" loading={modelsQuery.isLoading} placeholder="请选择要绑定的平台模型" options={[{ value: createModelValue, label: "＋ 创建新平台模型" }, ...matchingPlatformModels.map((model) => ({ value: model.id, label: `${model.displayName} · ${model.name}` }))]} />
                     </Form.Item>
                     <Form.Item noStyle shouldUpdate={(previous, current) => previous.targetModelId !== current.targetModelId}>
                         {({ getFieldValue }) => getFieldValue("targetModelId") === createModelValue ? (

@@ -5,8 +5,18 @@ description: Implemented changes that still need manual verification
 
 # Pending Tests
 
+- 画布文本生成流式打字上屏与断线恢复：在画布中配置文本节点发起文本生成，文本内容应随着服务端流式响应实时增量打印上屏，无需等待整段文本生成完成；多文本节点并发或页面刷新后，已挂载的文本任务仍能正常渐进式恢复完整文本内容。
+- 文本模型思考强度档位动态联动：文本设置面板与画布文本浮层选择文本模型时，根据模型配置的思考支持动态展示「思考强度」（支持自定义时提供低/中/高/关闭选项，仅支持固定思考时锁定对应强度，不支持思考的模型则隐藏该选项），避免盲目传参导致上游调用报错。
+- 素材库防重复提交与会话隔离：在素材库编辑、保存、删除素材或从工作台/灵感库批量导入素材时，按钮自动进入加载态并添加互斥锁；切换账号后未决异步操作自动终止，防止向新账号写入脏数据。
+- 统一素材保存 Hook（useSaveToAssets）：灵感库提取提示词、生图工作台生成图片、视频生成结果等均可通过统一 Hook 一键保存至素材库，自动携带会话版本校验并触发轻量气泡反馈。
+- 生图工作台审核状态与价格格式化：生图工作台针对内容安全拦截和审核中任务准确展示「待内容审核」状态标签；模型单张价格展示支持智能有效小数位（如 `¥0.008 / 张`），避免多余零占位。
+- 管理后台模型与渠道按模态分 Tab 管理与绑定防错：`/admin/models` 与 `/admin/channels` 页面提供「图片模型 / 文本模型」与「图片渠道 / 文本渠道」的分组 Segmented Tab；在模型管理配置渠道绑定时，下拉列表仅筛选出与当前模型模态匹配的渠道（如文本模型只列出文本渠道），彻底杜绝跨模态混绑导致的请求崩溃。
+- 渠道探测错误完整展示与密钥脱敏：在渠道管理中点击「测试连通性」或拉取上游模型列表时，若上游返回 4xx/5xx 等异常，弹窗完整展示真实上游报错信息并清洗冗余前缀；上游错误体中若包含 `sk-...` 等 API Key 字符串，前端与服务端均自动掩码脱敏（形如 `sk-***abc`），杜绝密钥泄露风险。
+- 轻量化双 Tab 气泡通知中心：顶栏通知中心采用 Popover 浮层取代全屏 Modal 弹窗交互；内建「全站公告」与「系统通知」双 Tab，支持轻量 Markdown 格式渲染与未读红点标记；采用 5 分钟只读查询缓存替代定时短轮询，消除后台无用网络消耗与弹窗打扰。
+- 模型选择器价格排版防溢出：在生图工作台、画布配置面板的模型选择下拉框中，长模型名称与价格标签（如 `¥0.008 / 张`）采用弹性自适应与自适应截断排版，防止在小屏或窄抽屉下价格被挤出视口或遮挡文字。
 - 渠道多上游模型聚合绑定与批量配置：`model_channels` 表增加独立主键 `id`（保留全部既有数据，唯一索引升级为 `(model_id, channel_id, upstream_model)`），支持同一渠道的不同上游模型绑定至同一平台模型（实现如将渠道内多个价格相同的模型聚合为一个平台福利模型）；渠道上游模型抽屉支持多选与一键「批量绑定平台模型」，模型配置抽屉支持独立调整每条上游模型记录的优先级与权重，调度器在同渠道多模型间正常加权轮询与自动故障转移。
 - 画布生成配置面板模型价格显示：修复前端状态库标准化渠道模型时过滤遗漏 `pricePerImage` 以及按模型展示名称或非渠道前缀查询时匹配失效的问题；画布配置节点模型选择下拉框中各项正常显示价格徽标（如 `¥0.008 / 张`），选中后在选择框右侧同步清晰展示价格。
+- 画布生成失败错误提示与内容安全合规拦截优化：修复生图抛错时画布节点 `errorDetails` 被通用文案“全部图片生成失败”硬编码覆盖的问题；保留真实上游报错并清洗冗余机器前缀（如 `status_code=400, `），节点卡片与详情弹窗中以主题自适应高对比度样式呈现；精确识别大模型内容安全与第三方相似性防护拦截，展示专属安全提示盾牌与修改提示语指引，此类合规拒绝保持快速返回不触发跨渠道重试与误冷却。
 - GPT Image 2.5 series and thinking effort (quality) adaptation: image settings panel now includes "Very High (`xhigh`)" and "Max (`max`)"; default channel includes `gpt-image-2.5-flare` and `gpt-image-2.5-sunburst`; image generation and edit requests forward the `quality` parameter properly and support `image-2.5-*` aliases.
 - Failover review: 30 isolated database and mocked-upstream cases pass. Recheck channel and model-binding eligibility after slot waits, publish cooldown before releasing capacity, and preserve failures newer than an in-flight success. Explicit refusals, including HTTP-200 refusal fields, must stop fallback without cooling a healthy channel; ordinary safety-service 503 errors must fall back. Health/attempt bookkeeping failures must not add model calls, and storage/result-persistence failures must not record successful charges. Existing timeouts, cooldown durations, concurrency limits, and the single extra fallback for ambiguous failures remain unchanged; real provider validation is still pending.
 - Authenticated page review: canvases, version history, image workbench, assets, prompts, all four user-center pages, all six admin pages, and their main read APIs have been checked. The rebuilt local image has been verified to show only image/text generation choices, localized logout labels, and `0 B` for zero storage. The local setup has no published text model or connected Agent, so actual AI generation and Agent tool calls still need separate validation; two third-party prompt preview images are blocked externally.

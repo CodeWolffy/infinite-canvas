@@ -10,6 +10,7 @@ import { finishRequestLog, startRequestLog } from "../request-logs.js";
 const paramsSchema = z.object({ id: z.string().uuid() });
 const channelBody = z.object({
   name: z.string().trim().min(1).max(120),
+  capability: z.enum(["image", "text"]).default("image"),
   protocol: z.enum(["openai", "gemini"]),
   baseUrl: z.string().url().refine((value) => /^https?:/.test(value)),
   apiKey: z.string().trim().min(1).max(4096).optional(),
@@ -21,6 +22,26 @@ const channelBody = z.object({
 const updateChannelBody = channelBody.partial().refine((body) => Object.keys(body).length > 0);
 type ChannelInput = z.infer<typeof channelBody>;
 type ChannelUpdate = z.infer<typeof updateChannelBody>;
+
+function maskApiKey(text: string, apiKey?: string): string {
+  let masked = text;
+  if (apiKey && apiKey.length > 4) {
+    masked = masked.replaceAll(apiKey, secretHint(apiKey));
+  }
+  return masked.replace(/sk-[a-zA-Z0-9_\-]{8,}/g, "sk-***");
+}
+
+function extractErrorMessage(text: string): string {
+  try {
+    const data = JSON.parse(text);
+    if (data?.error?.message) return String(data.error.message);
+    if (data?.message) return String(data.message);
+  } catch {
+    // ignore
+  }
+  const clean = text.trim().replace(/\s+/g, " ");
+  return clean.slice(0, 300) || "未知上游错误";
+}
 
 function publicChannel(channel: typeof channels.$inferSelect) {
   const { encryptedApiKey: _encryptedApiKey, ...safe } = channel;
@@ -197,6 +218,10 @@ export async function adminChannelRoutes(app: FastifyInstance) {
         signal: controller.signal,
       });
       if (!response.ok) {
+        const rawBody = await response.text().catch(() => "");
+        const extracted = extractErrorMessage(rawBody);
+        const masked = maskApiKey(extracted, apiKey);
+        const detailedMessage = `上游返回 HTTP ${response.status}: ${masked}`;
         await db
           .update(channels)
           .set({
@@ -206,8 +231,8 @@ export async function adminChannelRoutes(app: FastifyInstance) {
             updatedAt: new Date(),
           })
           .where(eq(channels.id, id));
-        await finishRequestLog(requestLogId, { httpStatus: response.status, category: `HTTP_${response.status}`, message: `上游返回 HTTP ${response.status}` });
-        return reply.code(502).send({ error: "upstream_error", message: `上游返回 HTTP ${response.status}` });
+        await finishRequestLog(requestLogId, { httpStatus: response.status, category: `HTTP_${response.status}`, message: detailedMessage });
+        return reply.code(502).send({ error: "upstream_error", message: detailedMessage });
       }
       const modelNames = extractModelNames(await response.json());
       const checkedAt = new Date();
@@ -219,12 +244,16 @@ export async function adminChannelRoutes(app: FastifyInstance) {
       return { models: modelNames, health: { ok: true, checkedAt } };
     } catch (error) {
       const checkedAt = new Date();
+      const rawError = error instanceof Error ? error.message : "无法连接上游渠道";
+      const maskedError = maskApiKey(rawError, apiKey);
+      const isTimeout = error instanceof Error && error.name === "AbortError";
+      const detailedMessage = isTimeout ? "连接上游超时" : `无法连接上游渠道: ${maskedError}`;
       await db
         .update(channels)
-        .set({ lastFailureAt: checkedAt, lastErrorCode: "NETWORK_ERROR", updatedAt: checkedAt })
+        .set({ lastFailureAt: checkedAt, lastErrorCode: isTimeout ? "TIMEOUT" : "NETWORK_ERROR", updatedAt: checkedAt })
         .where(eq(channels.id, id));
-      await finishRequestLog(requestLogId, { category: error instanceof Error && error.name === "AbortError" ? "timeout" : "NETWORK_ERROR", message: "无法连接上游渠道" });
-      return reply.code(502).send({ error: "upstream_unavailable", message: "无法连接上游渠道" });
+      await finishRequestLog(requestLogId, { category: isTimeout ? "timeout" : "NETWORK_ERROR", message: detailedMessage });
+      return reply.code(502).send({ error: "upstream_unavailable", message: detailedMessage });
     } finally {
       clearTimeout(timeout);
     }

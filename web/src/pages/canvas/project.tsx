@@ -8,7 +8,7 @@ import { useTranslation } from "react-i18next";
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { getGenerationBatch, retryGenerationTask, type GenerationTask } from "@/services/api/generation";
 import { getTextRequest } from "@/services/api/text";
-import { applyTextGenerationResult, hasTextGenerationRequest, textGenerationRequests } from "@/lib/canvas/canvas-text-generation";
+import { applyTextGenerationProgress, applyTextGenerationResult, hasTextGenerationRequest, textGenerationRequests } from "@/lib/canvas/canvas-text-generation";
 import { ApiError } from "@/services/api/request";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
@@ -582,7 +582,7 @@ function InfiniteCanvasPage() {
                             if (currentImage?.generationBatchId !== batchId || (currentImage.generationTaskId && currentImage.generationTaskId !== task.id)) return item;
                             const errorDetails = task.errorMessage || t("canvas.projectPage.generationFailed");
                             const images = item.metadata?.images?.map((image) => image.id === pendingImage.id ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image);
-                            return { ...item, metadata: { ...item.metadata, images, status: images?.some((image) => image.status === NODE_STATUS_LOADING) ? NODE_STATUS_LOADING : images?.some((image) => image.status === NODE_STATUS_SUCCESS) ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails } };
+                            return { ...item, metadata: { ...item.metadata, images, status: images?.some((image) => image.status === NODE_STATUS_LOADING) ? NODE_STATUS_LOADING : images?.some((image) => image.status === NODE_STATUS_SUCCESS) ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: images?.some((image) => image.status === NODE_STATUS_SUCCESS) ? undefined : errorDetails } };
                         });
                         return updated.map((item) => {
                             if (item.type !== CanvasNodeType.Config || item.metadata?.status !== NODE_STATUS_LOADING) return item;
@@ -2724,7 +2724,7 @@ function InfiniteCanvasPage() {
                         setNodes((prev) =>
                             prev.map((node) =>
                                 node.id === rootId
-                                    ? { ...node, metadata: { ...node.metadata, images: node.metadata?.images?.map((image) => (image.status === NODE_STATUS_LOADING && !image.generationBatchId ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image)) } }
+                                    ? { ...node, metadata: { ...node.metadata, images: node.metadata?.images?.map((image) => (image.status === NODE_STATUS_LOADING ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image)) } }
                                     : node,
                             ),
                         );
@@ -2738,9 +2738,9 @@ function InfiniteCanvasPage() {
                         const pending = prev.find((node) => node.id === rootId)?.metadata?.images?.some((image) => image.status === NODE_STATUS_LOADING && image.generationBatchId);
                         return prev.map((node) =>
                             node.id === nodeId && isConfigNode
-                                ? { ...node, metadata: { ...node.metadata, status: pending ? NODE_STATUS_LOADING : hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: pending || hasSuccess ? undefined : t("canvas.projectPage.generationFailed") } }
+                                ? { ...node, metadata: { ...node.metadata, status: pending ? NODE_STATUS_LOADING : hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: pending || hasSuccess ? undefined : (firstError || t("canvas.projectPage.generationFailed")) } }
                                 : node.id === rootId
-                                  ? { ...node, metadata: { ...node.metadata, status: pending ? NODE_STATUS_LOADING : hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: pending || hasSuccess ? undefined : t("canvas.projectPage.allFailed") } }
+                                  ? { ...node, metadata: { ...node.metadata, status: pending ? NODE_STATUS_LOADING : hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: pending || hasSuccess ? undefined : (firstError || t("canvas.projectPage.allFailed")) } }
                                     : node,
                         );
                     });
@@ -2876,6 +2876,7 @@ function InfiniteCanvasPage() {
                                 buildNodeResponseMessages({ ...generationContext, prompt: effectivePrompt }),
                                 (text) => {
                                     streamed = text;
+                                    setNodes((current) => current.map((item) => item.id === rootId ? applyTextGenerationProgress(item, textRequestId || "", text) : item));
                                 },
                                 {
                                     signal: controller.signal,
@@ -3048,6 +3049,7 @@ function InfiniteCanvasPage() {
                         buildNodeResponseMessages({ ...context, prompt }),
                         (text) => {
                             streamed = text;
+                            setNodes((current) => current.map((item) => item.id === node.id ? applyTextGenerationProgress(item, textRequestId || "", text) : item));
                         },
                         {
                             signal: controller.signal,

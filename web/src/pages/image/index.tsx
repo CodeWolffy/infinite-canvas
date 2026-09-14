@@ -19,7 +19,8 @@ import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { createGenerationBatch, deleteGenerationBatch, getGenerationBatch, getGenerationPreferences, getPublicModels, listGenerationBatches, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
 import { platformImageParameters, resolvePlatformImageModelId } from "@/services/api/image";
 import { uploadImage } from "@/services/image-storage";
-import { useAssetStore } from "@/stores/use-asset-store";
+import { useSaveToAssets } from "@/hooks/use-save-to-assets";
+import { formatModelPrice } from "@/lib/model-price";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -38,7 +39,7 @@ type GeneratedImage = {
 
 type GenerationResult = {
     id: string;
-    status: "queued" | "running" | "success" | "failed";
+    status: "queued" | "running" | "reviewing" | "success" | "failed";
     image?: GeneratedImage;
     error?: string;
 };
@@ -83,7 +84,7 @@ export default function ImagePage() {
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
-    const addAsset = useAssetStore((state) => state.addAsset);
+    const saveToAssets = useSaveToAssets();
     const [models, setModels] = useState<PublicModel[]>([]);
     const modelsRef = useRef<PublicModel[]>([]);
     const [modelId, setModelId] = useState(remixState?.modelId || "");
@@ -365,7 +366,7 @@ export default function ImagePage() {
         try {
             const stored = await uploadImage(image.dataUrl);
             assertCurrentSession(sessionVersion);
-            await addAsset({
+            await saveToAssets({
                 kind: "image",
                 title: t("imageWorkbench.resultTitle", { count: index + 1 }),
                 coverUrl: stored.url,
@@ -374,8 +375,6 @@ export default function ImagePage() {
                 data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
                 metadata: { source: "image-page", prompt },
             });
-            assertCurrentSession(sessionVersion);
-            message.success(t("common.addedToAssets"));
         } catch {
             if (useUserStore.getState().sessionVersion !== sessionVersion) return;
             message.error(t("common.requestFailed") || "加入素材失败，请重试");
@@ -640,7 +639,7 @@ export default function ImagePage() {
                                 {results.map((result, index) =>
                                     result.status === "success" && result.image ? (
                                         <ResultImageCard key={result.id} image={result.image} index={index} onEdit={addResultToReferences} onDownload={downloadImage} onSaveAsset={saveResultToAssets} />
-                                    ) : result.status === "queued" || result.status === "running" ? (
+                                    ) : result.status === "queued" || result.status === "running" || result.status === "reviewing" ? (
                                         <PendingImageCard key={result.id} status={result.status} />
                                     ) : (
                                         <FailedImageCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={() => void retryResults([index])} />
@@ -704,9 +703,8 @@ function GenerationSettings({ config, models, modelId, onModelChange, updateConf
                         placeholder={t("imageWorkbench.noModelHint")}
                         className="w-full"
                         options={models.map((model) => {
-                            const num = model.pricePerImage ? Number(model.pricePerImage) : null;
-                            const price = num !== null && !isNaN(num) ? ` (¥${Number.isInteger(num * 100) ? num.toFixed(2) : num}/张)` : "";
-                            return { value: model.id, label: `${model.displayName}${price}` };
+                            const price = formatModelPrice(model.pricePerImage);
+                            return { value: model.id, label: `${model.displayName}${price ? ` (${price}/张)` : ""}` };
                         })}
                     />
                 ) : (
@@ -767,8 +765,9 @@ function ResultImageCard({
     );
 }
 
-function PendingImageCard({ status }: { status: "queued" | "running" }) {
+function PendingImageCard({ status }: { status: "queued" | "running" | "reviewing" }) {
     const { t } = useTranslation();
+    const label = status === "queued" ? "排队中" : status === "reviewing" ? "待内容审核" : t("workbench.generating");
     return (
         <div className="relative aspect-square overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
             <div
@@ -780,7 +779,7 @@ function PendingImageCard({ status }: { status: "queued" | "running" }) {
             />
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                 <LoaderCircle className="size-6 animate-spin" />
-                <span>{status === "queued" ? "排队中" : t("workbench.generating")}</span>
+                <span>{label}</span>
             </div>
         </div>
     );

@@ -271,8 +271,9 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
                             {node.metadata?.videoTaskId ? <InfoRow label={t("canvas.nodeToolbar.videoTaskId")} value={node.metadata.videoTaskId} /> : null}
                             {imageBytes ? <InfoRow label={t("canvas.nodeToolbar.imageSize")} value={formatBytes(imageBytes)} /> : null}
                             {node.metadata?.errorDetails ? (
-                                <div className="rounded-lg border p-3 text-red-400" style={{ borderColor: theme.node.stroke }}>
-                                    {node.metadata.errorDetails}
+                                <div className="rounded-lg border p-3 text-xs leading-5" style={{ borderColor: theme.node.stroke, background: theme.node.fill }}>
+                                    <div className="mb-1 font-medium text-red-500 dark:text-red-400">{t("canvas.node.failed")}</div>
+                                    <div style={{ color: theme.node.text }}>{node.metadata.errorDetails}</div>
                                 </div>
                             ) : null}
                         </div>

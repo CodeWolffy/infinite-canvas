@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronRight, Copy, Download, Group, Image as ImageIcon, Music2, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
+import { AlertCircle, ChevronRight, Copy, Download, Group, Image as ImageIcon, Music2, Puzzle, RefreshCw, ShieldAlert, Star, Trash2, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
@@ -500,24 +500,81 @@ function LoadingContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
     );
 }
 
+export function formatNodeErrorMessage(error?: string): string {
+    if (!error || typeof error !== "string") return "";
+    let message = error.trim();
+    message = message.replace(/^Error:\s*/i, "");
+    message = message.replace(/^上游返回 HTTP \d+[:：]\s*/i, "");
+    message = message.replace(/^status_code=\d+[,，]\s*/i, "");
+    try {
+        const parsed = JSON.parse(message) as { error?: { message?: unknown } | unknown; message?: unknown };
+        const nested = parsed?.error && typeof parsed.error === "object" ? (parsed.error as { message?: unknown }).message : undefined;
+        const text = nested ?? parsed?.message;
+        if (typeof text === "string" && text.trim()) {
+            return formatNodeErrorMessage(text);
+        }
+    } catch {
+        // Plain text error.
+    }
+    return message.trim();
+}
+
+export function isContentPolicyError(error?: string): boolean {
+    if (!error || typeof error !== "string") return false;
+    const lower = error.toLowerCase();
+    return (
+        lower.includes("content_policy") ||
+        lower.includes("content_filter") ||
+        lower.includes("safety") ||
+        lower.includes("moderation") ||
+        lower.includes("unsafe") ||
+        /(?:内容审核|内容安全|审核拒绝|违规|敏感|防护限制|第三方内容相似性|相似性防护|相似性)/.test(error)
+    );
+}
+
 function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "node" | "theme" | "onRetry">) {
     const { t } = useTranslation();
+    const rawError = node.metadata?.errorDetails || node.metadata?.images?.find((image) => image.errorDetails)?.errorDetails;
+    const cleanError = formatNodeErrorMessage(rawError) || t("canvas.node.failed");
+    const isPolicy = isContentPolicyError(rawError);
+
     return (
-        <div className="flex max-w-[260px] flex-col items-center gap-3 px-5 text-center">
-            <div className="text-xs leading-5 text-red-300">{node.metadata?.errorDetails || t("canvas.node.failed")}</div>
-            <button
-                type="button"
-                className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
-                style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
-                onClick={(event) => {
-                    event.stopPropagation();
-                    onRetry?.(node);
-                }}
-                onMouseDown={(event) => event.stopPropagation()}
-            >
-                <RefreshCw className="size-3.5" />
-                {t("canvas.node.retry")}
-            </button>
+        <div className="flex h-full w-full flex-col items-center justify-center p-4">
+            <div className="flex max-w-[320px] flex-col items-center gap-2.5 px-3 text-center">
+                <div
+                    className="flex size-9 items-center justify-center rounded-xl"
+                    style={{ background: isPolicy ? "rgba(245,158,11,.12)" : "rgba(239,68,68,.12)" }}
+                >
+                    {isPolicy ? (
+                        <ShieldAlert className="size-4.5 text-amber-500 dark:text-amber-400" />
+                    ) : (
+                        <AlertCircle className="size-4.5 text-red-500 dark:text-red-400" />
+                    )}
+                </div>
+                <div className="text-xs font-semibold" style={{ color: theme.node.text }}>
+                    {isPolicy ? t("canvas.node.policyWarning") : t("canvas.node.failed")}
+                </div>
+                <div
+                    className="line-clamp-4 text-xs leading-relaxed"
+                    style={{ color: theme.node.muted }}
+                    title={cleanError}
+                >
+                    {cleanError}
+                </div>
+                <button
+                    type="button"
+                    className="mt-1 inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
+                    style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onRetry?.(node);
+                    }}
+                    onMouseDown={(event) => event.stopPropagation()}
+                >
+                    <RefreshCw className="size-3.5" />
+                    {t("canvas.node.retry")}
+                </button>
+            </div>
         </div>
     );
 }
@@ -656,10 +713,21 @@ function TextSlotStatus({ text }: { text: CanvasNodeText }) {
     const { t } = useTranslation();
     const failed = text.status === "error";
     const loading = text.status === "loading";
+    const cleanError = formatNodeErrorMessage(text.errorDetails) || t("canvas.node.failed");
     return (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: theme.node.fill, color: failed ? theme.node.text : theme.node.activeStroke }}>
-            {failed ? <span className="text-xs leading-5">{text.errorDetails || t("canvas.node.failed")}</span> : loading ? <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} /> : <span className="text-xs">{t("apiErrors.noContent")}</span>}
-            {loading ? <span className="text-[10px] tracking-[0.2em]">{t("canvas.node.generating")}</span> : null}
+        <div className="flex h-full w-full flex-col items-center justify-center gap-2.5 px-6 text-center" style={{ background: theme.node.fill }}>
+            {failed ? (
+                <span className="line-clamp-3 text-xs leading-relaxed" style={{ color: theme.node.muted }} title={cleanError}>
+                    {cleanError}
+                </span>
+            ) : loading ? (
+                <>
+                    <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
+                    <span className="text-[10px] tracking-[0.2em]" style={{ color: theme.node.activeStroke }}>{t("canvas.node.generating")}</span>
+                </>
+            ) : (
+                <span className="text-xs" style={{ color: theme.node.muted }}>{t("apiErrors.noContent")}</span>
+            )}
         </div>
     );
 }
@@ -884,10 +952,29 @@ function ImageSlotStatus({ image }: { image?: CanvasNodeImage }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
     const failed = image?.status === "error";
+    const rawError = image?.errorDetails;
+    const cleanError = formatNodeErrorMessage(rawError) || t("canvas.node.failed");
+    const isPolicy = isContentPolicyError(rawError);
     return (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: theme.node.fill, color: failed ? theme.node.text : theme.node.activeStroke }}>
-            {failed ? <span className="text-xs leading-5">{image.errorDetails || t("canvas.node.failed")}</span> : <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />}
-            {!failed ? <span className="text-[10px] tracking-[0.2em]">{t("canvas.node.generating")}</span> : null}
+        <div className="flex h-full w-full flex-col items-center justify-center gap-2.5 px-6 text-center" style={{ background: theme.node.fill }}>
+            {failed ? (
+                <>
+                    <div
+                        className="flex size-8 items-center justify-center rounded-lg"
+                        style={{ background: isPolicy ? "rgba(245,158,11,.12)" : "rgba(239,68,68,.12)" }}
+                    >
+                        {isPolicy ? <ShieldAlert className="size-4 text-amber-500 dark:text-amber-400" /> : <AlertCircle className="size-4 text-red-500 dark:text-red-400" />}
+                    </div>
+                    <span className="line-clamp-3 text-xs leading-relaxed" style={{ color: theme.node.muted }} title={cleanError}>
+                        {cleanError}
+                    </span>
+                </>
+            ) : (
+                <>
+                    <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
+                    <span className="text-[10px] tracking-[0.2em]" style={{ color: theme.node.activeStroke }}>{t("canvas.node.generating")}</span>
+                </>
+            )}
         </div>
     );
 }

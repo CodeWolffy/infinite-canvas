@@ -118,8 +118,12 @@ function hasContentPolicyRefusal(value: unknown) {
     || (Array.isArray(payload.choices) && payload.choices.some((choice) => choice?.finish_reason === "content_filter" || (typeof choice?.message?.refusal === "string" && Boolean(choice.message.refusal.trim()))));
 }
 
-function contentPolicyError(status: number) {
-  return new UpstreamError("内容审核拒绝：上游判定提示词或参考图不安全，请修改后重试", "content_policy", status, "never");
+function contentPolicyError(status: number, detail?: string) {
+  const clean = detail
+    ? detail.replace(/^上游返回 HTTP \d+[:：]\s*/, "").replace(/^status_code=\d+[,，]\s*/, "").trim()
+    : "";
+  const message = clean && !clean.includes("内容审核拒绝") ? `内容审核拒绝：${clean}` : clean || "内容审核拒绝：上游判定提示词或参考图不安全，请修改后重试";
+  return new UpstreamError(message, "content_policy", status, "never");
 }
 
 function classifyHttp(status: number, message: string, apiKey?: string) {
@@ -137,9 +141,10 @@ function classifyHttp(status: number, message: string, apiKey?: string) {
     (/content[ _-](?:policy|safety|moderation)|safety system/.test(lower) && /\b(?:violation|unsafe|rejected|rejection|blocked|refused)\b/.test(lower)) ||
     lower.includes("prompt is considered unsafe") ||
     lower.includes("prompt considered unsafe") ||
-    lower.includes("cannot be used to generate content");
+    lower.includes("cannot be used to generate content") ||
+    /(?:违反|不合规|违规|敏感|审核拒绝|防护限制|第三方内容相似性|相似性防护)/.test(detail);
   if (contentPolicy) {
-    return contentPolicyError(status);
+    return contentPolicyError(status, detail);
   }
   if (status === 429 || status >= 500 || status === 401 || status === 403) {
     return new UpstreamError(`上游返回 HTTP ${status}${detail ? `：${detail}` : ""}`, `http_${status}`, status, "always");

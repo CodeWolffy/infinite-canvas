@@ -17,6 +17,7 @@ export type AdminModel = {
 export type AdminChannel = {
     id: string;
     name: string;
+    capability: "image" | "text";
     protocol: "openai" | "gemini";
     baseUrl: string;
     status: "active" | "disabled" | "needs_attention";
@@ -58,7 +59,7 @@ export type ModelChannelBinding = {
 };
 
 export type ModelInput = Pick<AdminModel, "name" | "displayName" | "capability" | "status"> & { sortOrder?: number; pricePerImage?: string | number | null; description?: string | null; config?: Record<string, unknown> };
-export type ChannelInput = Pick<AdminChannel, "name" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency"> & { cooldownSeconds?: number; apiKey?: string };
+export type ChannelInput = Pick<AdminChannel, "name" | "capability" | "protocol" | "baseUrl" | "status" | "timeoutMs" | "maxConcurrency"> & { cooldownSeconds?: number; apiKey?: string };
 export type BindingInput = Pick<ModelChannelBinding, "upstreamModel" | "priority" | "weight" | "enabled"> & { id?: string };
 
 export async function getAdminModels() {

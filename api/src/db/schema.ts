@@ -100,6 +100,7 @@ export const models = pgTable(
 export const channels = pgTable("channels", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 120 }).notNull(),
+  capability: modelCapability("capability").notNull().default("image"),
   protocol: channelProtocol("protocol").notNull(),
   baseUrl: text("base_url").notNull(),
   encryptedApiKey: text("encrypted_api_key"),

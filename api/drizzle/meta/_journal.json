@@ -92,6 +92,13 @@
       "when": 1789122000000,
       "tag": "0012_model_channels_binding_id",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789208400000,
+      "tag": "0013_channel_capability",
+      "breakpoints": true
     }
   ]
 }

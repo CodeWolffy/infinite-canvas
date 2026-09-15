@@ -5,7 +5,7 @@ import { config } from "../config.js";
 import * as schema from "./schema.js";
 
 export const sqlClient = postgres(config.DATABASE_URL, {
-  max: 30,
+  max: Math.max(30, Math.min(95, config.IMAGE_WORKER_CONCURRENCY + 20)),
   idle_timeout: 20,
   connect_timeout: 10,
 });

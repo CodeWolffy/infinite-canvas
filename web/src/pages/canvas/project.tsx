@@ -890,17 +890,62 @@ function InfiniteCanvasPage() {
     );
 
     const visibleNodes = useMemo(() => {
-        const padding = 280;
+        // 画布节点数较少时无需视口裁剪，直接全量渲染避免闪烁和误裁
+        if (nodes.length <= 80) return nodes;
+
         const rect = containerRef.current?.getBoundingClientRect();
         const width = rect?.width || size.width;
         const height = rect?.height || size.height;
-        const viewLeft = -viewport.x / viewport.k - padding;
-        const viewTop = -viewport.y / viewport.k - padding;
-        const viewRight = viewLeft + width / viewport.k + padding * 2;
-        const viewBottom = viewTop + height / viewport.k + padding * 2;
+        const currentK = Number.isFinite(viewport.k) && viewport.k > 0 ? viewport.k : 1;
+        // 放大或缩小场景下均保证充裕的视口缓冲（世界坐标下至少 400px，且换算为屏幕缓冲不低于 400px）
+        const padding = Math.max(400 / currentK, 400);
+        const worldLeft = -viewport.x / currentK;
+        const worldTop = -viewport.y / currentK;
+        const viewLeft = worldLeft - padding;
+        const viewTop = worldTop - padding;
+        const viewRight = worldLeft + width / currentK + padding;
+        const viewBottom = worldTop + height / currentK + padding;
 
-        return nodes.filter((node) => node.position.x + node.width > viewLeft && node.position.x < viewRight && node.position.y + node.height > viewTop && node.position.y < viewBottom);
-    }, [nodes, size.height, size.width, viewport.k, viewport.x, viewport.y]);
+        return nodes.filter((node) => {
+            // 选中、连线中、打开配置面板或悬停工具条关联的节点始终保持可见
+            if (
+                selectedNodeIds.has(node.id) ||
+                dialogNodeId === node.id ||
+                connectingParams?.nodeId === node.id ||
+                toolbarNodeId === node.id
+            ) {
+                return true;
+            }
+
+            let minX = node.position.x;
+            let maxX = node.position.x + node.width;
+            let minY = node.position.y;
+            let maxY = node.position.y + node.height;
+
+            // 批量卡片展开时子卡片向上和向右扩展排布，扩展其真实可视包围盒
+            if (expandedBatchNodeIds.has(node.id)) {
+                const batchCount = Math.max(node.metadata?.images?.length || 0, node.metadata?.texts?.length || 0);
+                if (batchCount > 1) {
+                    const columns = Math.min(batchCount, 4);
+                    const rows = Math.ceil(batchCount / columns);
+                    minY = Math.min(minY, node.position.y - (rows - 1) * (node.height + 18));
+                    maxX = Math.max(maxX, node.position.x + columns * (node.width + 18));
+                }
+            }
+
+            // 节点配置面板通常在底部展开
+            if (dialogNodeId === node.id) {
+                minX = Math.min(minX, node.position.x + node.width / 2 - 320);
+                maxX = Math.max(maxX, node.position.x + node.width / 2 + 320);
+                maxY = Math.max(maxY, node.position.y + node.height + 550);
+            }
+
+            // 标题输入框向上延伸
+            minY = Math.min(minY, node.position.y - 40);
+
+            return maxX > viewLeft && minX < viewRight && maxY > viewTop && minY < viewBottom;
+        });
+    }, [connectingParams?.nodeId, dialogNodeId, expandedBatchNodeIds, nodes, selectedNodeIds, size.height, size.width, toolbarNodeId, viewport.k, viewport.x, viewport.y]);
 
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
     // The toolbar follows a single selected node selected by click, creation, marquee, or keyboard.
@@ -1308,11 +1353,16 @@ function InfiniteCanvasPage() {
     const setZoomScale = useCallback(
         (scale: number) => {
             const nextScale = Math.min(Math.max(scale, 0.05), 5);
-            setViewport((prev) => ({
-                x: size.width / 2 - ((size.width / 2 - prev.x) / prev.k) * nextScale,
-                y: size.height / 2 - ((size.height / 2 - prev.y) / prev.k) * nextScale,
-                k: nextScale,
-            }));
+            setViewport((prev) => {
+                const currentK = Number.isFinite(prev.k) && prev.k > 0 ? prev.k : 1;
+                const nextX = size.width / 2 - ((size.width / 2 - prev.x) / currentK) * nextScale;
+                const nextY = size.height / 2 - ((size.height / 2 - prev.y) / currentK) * nextScale;
+                return {
+                    x: Number.isFinite(nextX) ? nextX : prev.x,
+                    y: Number.isFinite(nextY) ? nextY : prev.y,
+                    k: nextScale,
+                };
+            });
             setContextMenu(null);
         },
         [size.height, size.width],

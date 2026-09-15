@@ -105,6 +105,22 @@ test("a private media ID in a new snapshot does not grant access", async () => {
   assert.equal((await app.inject({ url: `/api/media/${media.id}` })).statusCode, 403);
 });
 
+test("a missing or deleted media ID in a snapshot does not block canvas saving", async () => {
+  const missingId = randomUUID();
+  const response = await app.inject({ method: "POST", url: "/api/canvas-projects", payload: { title: "missing", snapshot: snapshot(missingId) } });
+  assert.equal(response.statusCode, 201);
+});
+
+test("a snapshot re-referencing deleting media revives it to ready status", async () => {
+  const media = await createMedia();
+  await db.update(schema.mediaObjects).set({ status: "deleting" }).where(eq(schema.mediaObjects.id, media.id));
+  const response = await app.inject({ method: "POST", url: "/api/canvas-projects", payload: { title: "revive", snapshot: snapshot(media.id) } });
+  assert.equal(response.statusCode, 201);
+  const [revived] = await db.select().from(schema.mediaObjects).where(eq(schema.mediaObjects.id, media.id));
+  assert.equal(revived.status, "ready");
+});
+
+
 test("private image caches revalidate permissions before returning 304", async () => {
   const media = await createMedia();
   const initial = await app.inject({ url: `/api/media/${media.id}` });

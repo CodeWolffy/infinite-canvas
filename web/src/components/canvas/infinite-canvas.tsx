@@ -90,20 +90,26 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
 
         const delta = -event.deltaY;
         const factor = Math.pow(1.1, delta / 100);
-        const newScale = Math.min(Math.max(viewport.k * factor, 0.05), 5);
+        const currentK = Number.isFinite(viewport.k) && viewport.k > 0 ? viewport.k : 1;
+        const newScale = Math.min(Math.max(currentK * factor, 0.05), 5);
         const rect = containerRef.current?.getBoundingClientRect();
-        if (!rect) return;
+        if (!rect || rect.width === 0 || rect.height === 0) return;
 
         const mouseX = event.clientX - rect.left;
         const mouseY = event.clientY - rect.top;
-        const worldX = (mouseX - viewport.x) / viewport.k;
-        const worldY = (mouseY - viewport.y) / viewport.k;
+        const worldX = (mouseX - viewport.x) / currentK;
+        const worldY = (mouseY - viewport.y) / currentK;
 
-        onViewportChange({
-            x: mouseX - worldX * newScale,
-            y: mouseY - worldY * newScale,
-            k: newScale,
-        });
+        const nextX = mouseX - worldX * newScale;
+        const nextY = mouseY - worldY * newScale;
+
+        if (Number.isFinite(nextX) && Number.isFinite(nextY) && Number.isFinite(newScale)) {
+            onViewportChange({
+                x: nextX,
+                y: nextY,
+                k: newScale,
+            });
+        }
     };
 
     const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {

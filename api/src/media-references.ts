@@ -1,4 +1,4 @@
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, not, or, sql } from "drizzle-orm";
 import { db } from "./db/client.js";
 import { assets, canvasProjectHistory, canvasProjectHistoryMedia, canvasProjectMedia, mediaObjects } from "./db/schema.js";
 
@@ -53,6 +53,21 @@ export async function syncCanvasMedia(tx: Transaction, projectId: string, userId
       where hm.media_id = ${mediaObjects.id} and h.user_id = ${userId}::uuid
     )`,
   );
+  // 1. 容错复原：若引用的图片属于当前用户且处于 deleting 状态（如撤销或并发保存竞态），安全恢复为 ready。
+  if (requestedIds.length) {
+    await tx
+      .update(mediaObjects)
+      .set({ status: "ready" })
+      .where(
+        and(
+          inArray(mediaObjects.id, requestedIds),
+          eq(mediaObjects.ownerId, userId),
+          eq(mediaObjects.status, "deleting"),
+        ),
+      );
+  }
+
+  // 2. 统计当前请求中真实可见且可用的媒体。
   const allowed = requestedIds.length
     ? await tx
         .selectDistinct({ id: mediaObjects.id })
@@ -66,11 +81,21 @@ export async function syncCanvasMedia(tx: Transaction, projectId: string, userId
           ),
         )
     : [];
-  if (allowed.length !== requestedIds.length) throw new Error("CANVAS_MEDIA_FORBIDDEN");
 
+  // 3. 安全检查：如果库中确实存在某个媒体，但不属于当前用户且不可见，拒绝保存（防止越权访问他人私有图片）。
+  // 已被物理清理或不存在的残余 ID 不属于越权，不阻止画布保存。
+  const existingInDb = requestedIds.length
+    ? await tx
+        .selectDistinct({ id: mediaObjects.id })
+        .from(mediaObjects)
+        .where(inArray(mediaObjects.id, requestedIds))
+    : [];
+  if (existingInDb.length !== allowed.length) throw new Error("CANVAS_MEDIA_FORBIDDEN");
+
+  const allowedIds = new Set(allowed.map((item) => item.id));
   const currentIds = new Set(current.map((item) => item.mediaId));
-  const nextIds = new Set(requestedIds);
-  const added = requestedIds.filter((id) => !currentIds.has(id));
+  const nextIds = new Set(requestedIds.filter((id) => allowedIds.has(id)));
+  const added = [...nextIds].filter((id) => !currentIds.has(id));
   const removed = [...currentIds].filter((id) => !nextIds.has(id));
   if (removed.length) {
     await tx

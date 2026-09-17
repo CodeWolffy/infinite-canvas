@@ -13,7 +13,7 @@ import { ApiError } from "@/services/api/request";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, uploadImage } from "@/services/image-storage";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 
 import { nanoid } from "nanoid";
@@ -196,13 +196,15 @@ function InfiniteCanvasPage() {
         hasMoved: boolean;
         startX: number;
         startY: number;
-        initialSelectedNodes: { id: string; x: number; y: number }[];
+        initialSelectedNodes: Map<string, { x: number; y: number }>;
+        movedIds: Set<string>;
     }>({
         isDraggingNode: false,
         hasMoved: false,
         startX: 0,
         startY: 0,
-        initialSelectedNodes: [],
+        initialSelectedNodes: new Map(),
+        movedIds: new Set(),
     });
 
     const config = useConfigStore((state) => state.config);
@@ -948,6 +950,48 @@ function InfiniteCanvasPage() {
     }, [connectingParams?.nodeId, dialogNodeId, expandedBatchNodeIds, nodes, selectedNodeIds, size.height, size.width, toolbarNodeId, viewport.k, viewport.x, viewport.y]);
 
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+
+    // Connections are culled like nodes; a cubic curve stays inside its control-point hull, so endpoint bounds widened by the curvature is a safe test.
+    const visibleConnections = useMemo(() => {
+        if (connections.length <= 50 || nodes.length <= 80) {
+            return connections
+                .map((connection) => {
+                    const from = nodeById.get(connection.fromNodeId);
+                    const to = nodeById.get(connection.toNodeId);
+                    return from && to ? { connection, from, to } : null;
+                })
+                .filter((item): item is { connection: (typeof connections)[number]; from: CanvasNodeData; to: CanvasNodeData } => item !== null);
+        }
+
+        const rect = containerRef.current?.getBoundingClientRect();
+        const width = rect?.width || size.width;
+        const height = rect?.height || size.height;
+        const currentK = Number.isFinite(viewport.k) && viewport.k > 0 ? viewport.k : 1;
+        const padding = Math.max(400 / currentK, 400);
+        const worldLeft = -viewport.x / currentK;
+        const worldTop = -viewport.y / currentK;
+        const viewLeft = worldLeft - padding;
+        const viewTop = worldTop - padding;
+        const viewRight = worldLeft + width / currentK + padding;
+        const viewBottom = worldTop + height / currentK + padding;
+
+        return connections.flatMap((connection) => {
+            const from = nodeById.get(connection.fromNodeId);
+            const to = nodeById.get(connection.toNodeId);
+            if (!from || !to) return [];
+            const startX = from.position.x + from.width;
+            const startY = from.position.y + from.height / 2;
+            const endX = to.position.x;
+            const endY = to.position.y + to.height / 2;
+            const curvature = Math.max(Math.abs(endX - startX) * 0.5, 50);
+            const inView =
+                Math.max(startX + curvature, endX) > viewLeft &&
+                Math.min(startX, endX - curvature) < viewRight &&
+                Math.max(startY, endY) > viewTop &&
+                Math.min(startY, endY) < viewBottom;
+            return inView ? [{ connection, from, to }] : [];
+        });
+    }, [connections, nodeById, nodes.length, size.height, size.width, viewport.k, viewport.x, viewport.y]);
     // The toolbar follows a single selected node selected by click, creation, marquee, or keyboard.
     // It stays hidden for multi-selection and while isNodeDragging is true.
     const singleSelectedNodeId = selectedNodeIds.size === 1 ? Array.from(selectedNodeIds)[0] : null;
@@ -1510,12 +1554,14 @@ function InfiniteCanvasPage() {
                 });
             }
         });
+        const initialSelectedNodes = new Map(currentNodes.filter((node) => dragIds.has(node.id)).map((node) => [node.id, { x: node.position.x, y: node.position.y }]));
         dragRef.current = {
             isDraggingNode: true,
             hasMoved: false,
             startX: event.clientX,
             startY: event.clientY,
-            initialSelectedNodes: currentNodes.filter((node) => dragIds.has(node.id)).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y })),
+            initialSelectedNodes,
+            movedIds: new Set(initialSelectedNodes.keys()),
         };
         historyPausedRef.current = true;
         nodeDraggingRef.current = true;
@@ -1529,22 +1575,22 @@ function InfiniteCanvasPage() {
         }
         if (!dragRef.current.isDraggingNode) return;
 
-        const wasClick = !dragRef.current.hasMoved && dragRef.current.initialSelectedNodes.length === 1;
-        const clickedNodeId = dragRef.current.initialSelectedNodes[0]?.id;
+        const wasClick = !dragRef.current.hasMoved && dragRef.current.initialSelectedNodes.size === 1;
+        const clickedNodeId = dragRef.current.initialSelectedNodes.keys().next().value;
         const currentViewport = viewportRef.current;
         const dx = clientX == null ? 0 : (clientX - dragRef.current.startX) / currentViewport.k;
         const dy = clientY == null ? 0 : (clientY - dragRef.current.startY) / currentViewport.k;
         const initialPositions = dragRef.current.initialSelectedNodes;
+        const movedIds = dragRef.current.movedIds;
 
         historyPausedRef.current = false;
         nodeDraggingRef.current = false;
         setIsNodeDragging(false);
         setDropTargetGroupId(null);
         if (dragRef.current.hasMoved && clientX != null && clientY != null) {
-            const movedIds = new Set(initialPositions.map((item) => item.id));
             setNodes((prev) => {
                 const moved = prev.map((node) => {
-                    const initial = initialPositions.find((item) => item.id === node.id);
+                    const initial = initialPositions.get(node.id);
                     return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
                 });
                 const targetGroup = findGroupDropTarget(movedIds, moved);
@@ -1560,7 +1606,8 @@ function InfiniteCanvasPage() {
 
         dragRef.current.isDraggingNode = false;
         dragRef.current.hasMoved = false;
-        dragRef.current.initialSelectedNodes = [];
+        dragRef.current.initialSelectedNodes = new Map();
+        dragRef.current.movedIds = new Set();
         if (wasClick && clickedNodeId) {
             const clickedNode = nodesRef.current.find((node) => node.id === clickedNodeId);
             const clickedDefinition = clickedNode ? getNodeDefinition(clickedNode.type) : undefined;
@@ -1581,22 +1628,22 @@ function InfiniteCanvasPage() {
                 const dx = (event.clientX - dragRef.current.startX) / currentViewport.k;
                 const dy = (event.clientY - dragRef.current.startY) / currentViewport.k;
                 const initialPositions = dragRef.current.initialSelectedNodes;
+                const movedIds = dragRef.current.movedIds;
                 if (Math.abs(event.clientX - dragRef.current.startX) > 3 || Math.abs(event.clientY - dragRef.current.startY) > 3) {
                     dragRef.current.hasMoved = true;
                 }
 
-                const movedIds = new Set(initialPositions.map((item) => item.id));
-                const previewNodes = nodesRef.current.map((node) => {
-                    const initial = initialPositions.find((item) => item.id === node.id);
-                    return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
-                });
-                setDropTargetGroupId(findGroupDropTarget(movedIds, previewNodes)?.id || null);
-
+                // Drop-target detection and node updates both run once per frame; mousemove can fire far more often than the display refreshes.
                 if (rafRef.current) cancelAnimationFrame(rafRef.current);
                 rafRef.current = requestAnimationFrame(() => {
+                    const previewNodes = nodesRef.current.map((node) => {
+                        const initial = initialPositions.get(node.id);
+                        return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
+                    });
+                    setDropTargetGroupId(findGroupDropTarget(movedIds, previewNodes)?.id || null);
                     setNodes((prev) =>
                         prev.map((node) => {
-                            const initial = initialPositions.find((item) => item.id === node.id);
+                            const initial = initialPositions.get(node.id);
                             return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
                         }),
                     );
@@ -3270,6 +3317,7 @@ function InfiniteCanvasPage() {
     const insertAssistantImage = useCallback(
         async (image: CanvasAssistantImage) => {
             const storedImage = image.storageKey ? { url: image.dataUrl, storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" } : await uploadImage(image.dataUrl);
+            await ensureImagePreview(storedImage.storageKey);
             const meta = storedImage.width === 1 && storedImage.height === 1 ? await readImageMeta(storedImage.url) : storedImage;
             const config = fitNodeSize(meta.width, meta.height);
             const center = screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
@@ -3479,32 +3527,25 @@ function InfiniteCanvasPage() {
                     onDrop={handleDrop}
                 >
                     <svg className="absolute left-0 top-0 h-[10000px] w-[10000px] overflow-visible" style={{ pointerEvents: "none", transform: "translateZ(0)", zIndex: 0 }}>
-                        {connections
-                            .map((connection) => {
-                                const from = nodeById.get(connection.fromNodeId);
-                                const to = nodeById.get(connection.toNodeId);
-                                if (!from || !to) return null;
-
-                                return (
-                                    <ConnectionPath
-                                        key={connection.id}
-                                        connection={connection}
-                                        from={from}
-                                        to={to}
-                                        active={selectedConnectionId === connection.id || relatedHighlight.connectionIds.has(connection.id)}
-                                        onSelect={() => {
-                                            setSelectedConnectionId(connection.id);
-                                            setSelectedNodeIds(new Set());
-                                            setContextMenu(null);
-                                        }}
-                                        onContextMenu={(event) => {
-                                            setSelectedConnectionId(connection.id);
-                                            setSelectedNodeIds(new Set());
-                                            setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId: connection.id });
-                                        }}
-                                    />
-                                );
-                            })}
+                        {visibleConnections.map(({ connection, from, to }) => (
+                            <ConnectionPath
+                                key={connection.id}
+                                connection={connection}
+                                from={from}
+                                to={to}
+                                active={selectedConnectionId === connection.id || relatedHighlight.connectionIds.has(connection.id)}
+                                onSelect={() => {
+                                    setSelectedConnectionId(connection.id);
+                                    setSelectedNodeIds(new Set());
+                                    setContextMenu(null);
+                                }}
+                                onContextMenu={(event) => {
+                                    setSelectedConnectionId(connection.id);
+                                    setSelectedNodeIds(new Set());
+                                    setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId: connection.id });
+                                }}
+                            />
+                        ))}
                         {connectingParams ? <ActiveConnectionPath node={nodeById.get(connectingParams.nodeId)} handle={connectingParams} mouseWorld={mouseWorld} target={connectionTargetNodeId ? nodeById.get(connectionTargetNodeId) : undefined} /> : null}
                     </svg>
 

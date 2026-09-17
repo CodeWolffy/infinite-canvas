@@ -31,6 +31,8 @@ function setup(t) {
         "@/services/api/canvas-projects": canvasApi,
         "@/services/api/assets": assetApi,
         "@/services/api/media": { mediaId: (id) => id, mediaUrl: (id) => `/api/media/${id}` },
+        "@/services/image-storage": { ensureImagePreview: async () => undefined, previewUrlFor: () => undefined },
+        "@/lib/model-price": { formatModelPrice: () => "" },
         "@/lib/utils": { randomId: require("nanoid").nanoid },
     };
     // Load production stores and real Zustand, replacing only their browser/API dependencies.

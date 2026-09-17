@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Empty, Input, Modal, Pagination, Tag } from "antd";
 import { Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
-import { useAssetStore, type Asset } from "@/stores/use-asset-store";
+import { getImagePreviewRevision, subscribeImagePreviews } from "@/services/image-storage";
+import { assetCoverUrl, useAssetStore, type Asset } from "@/stores/use-asset-store";
 
 export type InsertAssetPayload = { kind: "text"; content: string; title: string } | { kind: "image"; dataUrl: string; title: string; storageKey?: string } | { kind: "video"; url: string; title: string; storageKey?: string; width?: number; height?: number };
 
@@ -54,39 +55,35 @@ function PickerCard({ title, kind, cover, onClick }: { title: string; kind: stri
 
 function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => void }) {
     const { t } = useTranslation();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const assets = useAssetStore((state) => state.assets);
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState("all");
     const [page, setPage] = useState(1);
 
     const filtered = useMemo(() => {
-        const query = keyword.trim().toLowerCase();
-        return assets
-            .filter((a) => a.kind === "text" || a.kind === "image" || a.kind === "video")
-            .filter((a) => kindFilter === "all" || a.kind === kindFilter)
-            .filter((a) => !query || [a.title, ...(a.tags || [])].join(" ").toLowerCase().includes(query));
-    }, [assets, keyword, kindFilter]);
+        return assets.filter((asset) => {
+            if (kindFilter !== "all" && asset.kind !== kindFilter) return false;
+            if (keyword.trim() && !asset.title.toLowerCase().includes(keyword.trim().toLowerCase())) return false;
+            return true;
+        });
+    }, [assets, kindFilter, keyword]);
 
-    const visible = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
-
-    useEffect(() => {
-        const maxPage = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-        setPage((v) => Math.min(v, maxPage));
-    }, [filtered.length]);
+    const visible = useMemo(() => {
+        const start = (page - 1) * PAGE_SIZE;
+        return filtered.slice(start, start + PAGE_SIZE);
+    }, [filtered, page]);
 
     const handleInsert = (asset: Asset) => {
-        if (asset.kind === "text") {
-            onInsert({ kind: "text", content: asset.data.content, title: asset.title });
-        } else {
-            onInsert(asset.kind === "video" ? { kind: "video", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, width: asset.data.width, height: asset.data.height } : { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title });
-        }
+        if (asset.kind === "text") onInsert({ kind: "text", content: asset.data.content, title: asset.title });
+        else if (asset.kind === "image") onInsert({ kind: "image", dataUrl: asset.data.dataUrl, title: asset.title, storageKey: asset.data.storageKey });
+        else if (asset.kind === "video") onInsert({ kind: "video", url: asset.data.url, title: asset.title, storageKey: asset.data.storageKey, width: asset.data.width, height: asset.data.height });
     };
 
     return (
-        <div className="space-y-4">
-            <div className="flex flex-wrap items-center gap-3">
+        <div className="space-y-4 pt-2">
+            <div className="flex items-center justify-between gap-3">
                 <Input
-                    className="w-56"
                     size="small"
                     prefix={<Search className="size-3.5 text-stone-400" />}
                     placeholder={t("canvas.assetPicker.search")}
@@ -117,7 +114,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
             {visible.length ? (
                 <div className="grid grid-cols-4 gap-3">
                     {visible.map((asset) => (
-                        <PickerCard key={asset.id} title={asset.title} kind={asset.kind} cover={asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "")} onClick={() => handleInsert(asset)} />
+                        <PickerCard key={asset.id} title={asset.title} kind={asset.kind} cover={assetCoverUrl(asset)} onClick={() => handleInsert(asset)} />
                     ))}
                 </div>
             ) : (

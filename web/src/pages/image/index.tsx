@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, RefreshCw, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Select, Tag, Tooltip, Typography } from "antd";
 import dayjs from "dayjs";
 import { saveAs } from "file-saver";
@@ -18,7 +18,7 @@ import { nanoid } from "nanoid";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { createGenerationBatch, deleteGenerationBatch, getGenerationBatch, getGenerationPreferences, getPublicModels, listGenerationBatches, retryGenerationTask, updateGenerationPreferences, uploadGenerationMedia, type GenerationBatchDetail, type GenerationBatchListItem, type GenerationTask, type PublicModel } from "@/services/api/generation";
 import { platformImageParameters, resolvePlatformImageModelId } from "@/services/api/image";
-import { uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { useSaveToAssets } from "@/hooks/use-save-to-assets";
 import { formatModelPrice } from "@/lib/model-price";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
@@ -77,6 +77,7 @@ const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"])
 export default function ImagePage() {
     const { message, modal } = App.useApp();
     const { t } = useTranslation();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const location = useLocation();
     const remixState = location.state as { prompt?: string; modelId?: string } | null;
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -244,6 +245,7 @@ export default function ImagePage() {
             const nextReferences = await Promise.all(
                 imageFiles.map(async (file) => {
                     const media = await uploadGenerationMedia(file, file.name);
+                    void ensureImagePreview(media.id);
                     return { id: nanoid(), name: file.name, type: media.mimeType, dataUrl: media.url, storageKey: media.id };
                 }),
             );
@@ -268,6 +270,7 @@ export default function ImagePage() {
             const nextReferences = await Promise.all(
                 blobs.map(async (blob, index) => {
                     const media = await uploadGenerationMedia(blob, `clipboard-${index + 1}.png`);
+                    void ensureImagePreview(media.id);
                     return { id: nanoid(), name: media.originalName, type: media.mimeType, dataUrl: media.url, storageKey: media.id };
                 }),
             );
@@ -577,7 +580,7 @@ export default function ImagePage() {
                                 >
                                     {references.map((item, index) => (
                                         <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
-                                            <img src={item.dataUrl} alt={item.name} className="size-full object-cover" />
+                                            <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} className="size-full object-cover" />
                                             <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{imageReferenceLabel(index)}</span>
                                             <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
                                             <button
@@ -734,9 +737,10 @@ function ResultImageCard({
     onSaveAsset: (image: GeneratedImage, index: number) => void;
 }) {
     const { t } = useTranslation();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
-            <Image src={image.dataUrl} alt={t("imageWorkbench.resultAlt", { count: index + 1 })} className="aspect-square object-cover" />
+            <Image src={previewUrlFor(image.storageKey) || image.dataUrl} preview={{ src: image.dataUrl }} alt={t("imageWorkbench.resultAlt", { count: index + 1 })} className="aspect-square object-cover" />
             <div className="space-y-2 border-t border-stone-200 px-3 py-2.5 dark:border-stone-800">
                 <div className="flex min-w-0 gap-x-2 gap-y-1 text-xs text-stone-500 dark:text-stone-400">
                     {image.width && image.height ? <span>{image.width}x{image.height}</span> : null}
@@ -816,6 +820,9 @@ function fileExtension(mimeType?: string) {
 function summaryToLog(batch: GenerationBatchListItem, models: PublicModel[]): GenerationLog {
     const parameters = batch.parameters || {};
     const model = models.find((item) => item.id === batch.modelId);
+    batch.summary.thumbnailMediaIds.forEach((mediaId) => {
+        void ensureImagePreview(mediaId);
+    });
     return {
         id: batch.id,
         createdAt: new Date(batch.createdAt).getTime(),
@@ -899,6 +906,7 @@ function LogPanel({
 
 function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: GenerationLog; selected: boolean; active: boolean; onSelectedChange: (checked: boolean) => void; onClick: () => void }) {
     const { t } = useTranslation();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const thumbnails = (log.thumbnails || []).filter(Boolean).slice(0, 4);
 
     return (
@@ -914,9 +922,11 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                         <div className="truncate text-sm font-semibold leading-5">{log.title}</div>
                         {thumbnails.length ? (
                             <div className="mt-2 flex gap-1 overflow-hidden">
-                                {thumbnails.map((image, index) => (
-                                    <img key={`${log.id}-${index}`} src={image} alt="" className="size-8 shrink-0 rounded-md object-cover" />
-                                ))}
+                                {thumbnails.map((image, index) => {
+                                    const mediaId = image.startsWith("/api/media/") ? image.replace("/api/media/", "") : undefined;
+                                    const previewUrl = previewUrlFor(mediaId) || image;
+                                    return <img key={`${log.id}-${index}`} src={previewUrl} alt="" className="size-8 shrink-0 rounded-md object-cover" />;
+                                })}
                             </div>
                         ) : null}
                     </div>
@@ -959,6 +969,7 @@ function isActiveTask(task: GenerationTask) {
 
 function taskToResult(task: GenerationTask): GenerationResult {
     if (task.status === "succeeded" && task.image) {
+        void ensureImagePreview(task.image.mediaId);
         return { id: task.id, status: "success", image: { id: task.id, dataUrl: task.image.url, storageKey: task.image.mediaId, durationMs: taskDuration(task), width: 0, height: 0, bytes: 0 } };
     }
     if (task.status === "failed" || task.status === "canceled") return { id: task.id, status: "failed", error: task.errorMessage || task.errorCode || i18n.t("workbench.generationFailed") };
@@ -973,6 +984,12 @@ function detailToLog(detail: GenerationBatchDetail, models: PublicModel[]): Gene
     const failCount = detail.tasks.filter((task) => task.status === "failed" || task.status === "canceled").length;
     const active = detail.tasks.some(isActiveTask);
     const model = models.find((item) => item.id === detail.batch.modelId);
+    detail.referenceMediaIds.forEach((mediaId) => {
+        void ensureImagePreview(mediaId);
+    });
+    images.forEach((image) => {
+        void ensureImagePreview(image.storageKey);
+    });
     return {
         id: detail.batch.id,
         createdAt: new Date(detail.batch.createdAt).getTime(),

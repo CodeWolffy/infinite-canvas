@@ -46,7 +46,17 @@ export function buildApp() {
 
   app.register(cookie);
   app.register(cors, {
-    origin: config.CORS_ORIGINS,
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (config.CORS_ORIGINS.includes(origin)) return cb(null, true);
+      try {
+        const parsed = new URL(origin);
+        if (["localhost", "127.0.0.1"].includes(parsed.hostname)) {
+          return cb(null, true);
+        }
+      } catch {}
+      cb(null, false);
+    },
     credentials: true,
   });
   app.register(multipart, {
@@ -60,7 +70,15 @@ export function buildApp() {
     let sameOrigin = false;
     try {
       const parsed = new URL(origin);
-      sameOrigin = parsed.origin === origin && ["http:", "https:"].includes(parsed.protocol) && parsed.host === request.headers.host;
+      const forwardedHost = (request.headers["x-forwarded-host"] as string | undefined)?.split(",")[0]?.trim();
+      const host = forwardedHost || request.headers.host;
+      const hostName = (host ? host.split(":")[0] : undefined) ?? "";
+      sameOrigin =
+        parsed.origin === origin &&
+        ["http:", "https:"].includes(parsed.protocol) &&
+        (parsed.host === host ||
+          parsed.host === request.headers.host ||
+          (Boolean(hostName) && ["localhost", "127.0.0.1"].includes(parsed.hostname) && ["localhost", "127.0.0.1"].includes(hostName)));
     } catch {}
     if (!sameOrigin && !config.CORS_ORIGINS.includes(origin)) {
       return reply.code(403).send({ error: "invalid_origin", message: "请求来源不受信任" });

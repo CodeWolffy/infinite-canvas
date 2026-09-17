@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { randomId } from "@/lib/utils";
 import * as assetApi from "@/services/api/assets";
 import { mediaId, mediaUrl } from "@/services/api/media";
+import { ensureImagePreview, previewUrlFor } from "@/services/image-storage";
 import { assertCurrentSession, useUserStore } from "@/stores/use-user-store";
 
 export type AssetKind = "text" | "image" | "video";
@@ -42,6 +43,13 @@ type AssetStore = {
     cleanupImages: (extra?: unknown) => void;
 };
 
+// 卡片用缩略图渲染，自定义封面（远程地址或单独上传的封面）保持原样。
+export function assetCoverUrl(asset: Asset) {
+    const own = asset.kind === "image" ? asset.data.dataUrl : "";
+    const cover = asset.coverUrl || own;
+    return asset.kind === "image" && cover === own ? previewUrlFor(asset.data.storageKey) || cover : cover;
+}
+
 const hydratePromises = new Map<string, Promise<void>>();
 
 function stringMetadata(metadata: Record<string, unknown>, key: string) {
@@ -78,13 +86,17 @@ function normalizeAsset(record: assetApi.AssetRecord): Asset {
         };
     }
     const url = mediaUrl(record.mediaId || "");
+    const storageKey = mediaId(record.mediaId || "");
+    if (storageKey) {
+        void ensureImagePreview(storageKey);
+    }
     return {
         ...common,
         kind: "image",
         coverUrl: url,
         data: {
             dataUrl: url,
-            storageKey: mediaId(record.mediaId || ""),
+            storageKey,
             width: numberMetadata(metadata, "width"),
             height: numberMetadata(metadata, "height"),
             bytes: numberMetadata(metadata, "bytes"),
@@ -125,11 +137,17 @@ export const useAssetStore = create<AssetStore>()((set, get) => ({
         if (get().hydratedUserId !== userId) set({ assets: [], hydrated: false, hydratedUserId: userId });
         let request = hydratePromises.get(userId);
         if (!request) {
-            request = assetApi.listAssets().then((records) => {
-                if (useUserStore.getState().sessionVersion === sessionVersion) set({ assets: records.map(normalizeAsset), hydrated: true });
-            }).finally(() => {
-                if (useUserStore.getState().sessionVersion === sessionVersion) hydratePromises.delete(userId);
-            });
+            request = assetApi
+                .listAssets()
+                .then((records) => {
+                    if (useUserStore.getState().sessionVersion === sessionVersion) {
+                        const assets = records.map(normalizeAsset);
+                        set({ assets, hydrated: true });
+                    }
+                })
+                .finally(() => {
+                    if (useUserStore.getState().sessionVersion === sessionVersion) hydratePromises.delete(userId);
+                });
             hydratePromises.set(userId, request);
         }
         await request;

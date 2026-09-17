@@ -53,6 +53,8 @@ test("image metadata reading cannot upload an old account's bytes after switchin
         "@/lib/image-utils": { readImageMeta: () => new Promise((resolve) => { finish = resolve; }) },
         "@/services/api/media": { uploadMedia: async () => { uploads++; return { id: "new-account-image", url: "/api/media/new-account-image", width: 1, height: 1, byteSize: 13, mimeType: "image/png" }; } },
         "@/stores/use-config-store": { withLocalProxy: (url) => url },
+        localforage: { createInstance: () => ({ getItem: async () => null, setItem: async () => null, removeItem: async () => null }) },
+        "@/lib/image-thumbnail": { createImageThumbnail: async () => new Blob() },
     });
     const pending = uploadImage(new Blob(["private bytes"]));
     auth.state.sessionVersion++;

@@ -183,8 +183,8 @@ async function decodeImageResponse(value: unknown) {
   const data = (value as { data?: unknown }).data;
   if (Array.isArray(data) && data[0] && typeof data[0] === "object") {
     const first = data[0] as { b64_json?: unknown; url?: unknown };
-    if (typeof first.b64_json === "string") return decodeBase64Image(first.b64_json);
-    if (typeof first.url === "string") return downloadImage(first.url);
+    if (typeof first.b64_json === "string" && first.b64_json.trim()) return decodeBase64Image(first.b64_json.trim());
+    if (typeof first.url === "string" && first.url.trim()) return downloadImage(first.url.trim());
   }
   const candidates = (value as { candidates?: unknown }).candidates;
   if (Array.isArray(candidates)) {
@@ -194,11 +194,11 @@ async function decodeImageResponse(value: unknown) {
       for (const part of parts) {
         const inline = (part as { inlineData?: { data?: unknown }; inline_data?: { data?: unknown } }).inlineData ??
           (part as { inline_data?: { data?: unknown } }).inline_data;
-        if (inline && typeof inline.data === "string") return decodeBase64Image(inline.data);
+        if (inline && typeof inline.data === "string" && inline.data.trim()) return decodeBase64Image(inline.data.trim());
         const fileData = (part as { fileData?: { fileUri?: unknown }; file_data?: { file_uri?: unknown } }).fileData ??
           (part as { file_data?: { file_uri?: unknown } }).file_data;
         const fileUri = fileData && ("fileUri" in fileData ? fileData.fileUri : "file_uri" in fileData ? fileData.file_uri : undefined);
-        if (typeof fileUri === "string") return downloadImage(fileUri);
+        if (typeof fileUri === "string" && fileUri.trim()) return downloadImage(fileUri.trim());
       }
     }
   }
@@ -312,8 +312,11 @@ export async function downloadImage(url: string) {
 }
 
 export async function validateGeneratedImage(buffer: Buffer) {
-  if (!buffer.length || buffer.length > config.MAX_GENERATED_BYTES) {
-    throw new UpstreamError("生成图片大小无效", "image_too_large", undefined, "never");
+  if (!buffer.length) {
+    throw new UpstreamError("生成图片内容为空", "invalid_image", undefined, "once");
+  }
+  if (buffer.length > config.MAX_GENERATED_BYTES) {
+    throw new UpstreamError(`生成图片超过 ${maxGeneratedMb}MB`, "image_too_large", undefined, "never");
   }
   const detected = await fileTypeFromBuffer(buffer);
   if (!detected || !["image/png", "image/jpeg", "image/webp"].includes(detected.mime)) {
